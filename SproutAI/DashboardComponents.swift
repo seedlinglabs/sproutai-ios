@@ -287,6 +287,7 @@ struct TopicAccordionView: View {
     
     private var expandedContent: some View {
         VStack(spacing: 16) {
+            Spacer()
             videosSection
             quizSection
         }
