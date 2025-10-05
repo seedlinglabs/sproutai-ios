@@ -638,6 +638,7 @@ class AuthService: ObservableObject {
             "email": email,
             "phone_number": normalizedPhone,
             "password": password,
+            "user_type": "parent",
             "school_id": schoolId,
             "class_access": grades.flatMap { g in sections.map { "\(g)\($0)" } }
         ]
