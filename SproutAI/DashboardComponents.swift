@@ -287,6 +287,7 @@ struct TopicAccordionView: View {
     
     private var expandedContent: some View {
         VStack(spacing: 16) {
+            Spacer()
             videosSection
             quizSection
         }
@@ -328,10 +329,19 @@ struct TopicAccordionView: View {
     
     private var quizSection: some View {
         Group {
-            if let assessmentQuestions = topic.aiContent?.assessmentQuestions,
-               !assessmentQuestions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                quizButton
+            if let assessmentQuestions = topic.aiContent?.assessmentQuestions {
+                let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' - assessmentQuestions: '\(assessmentQuestions.prefix(100))'")
+                let trimmedQuestions = assessmentQuestions.trimmingCharacters(in: .whitespacesAndNewlines)
+                let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' - trimmed length: \(trimmedQuestions.count)")
+                
+                if !trimmedQuestions.isEmpty {
+                    quizButton
+                } else {
+                    let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' - Quiz button hidden: questions are empty after trimming")
+                    EmptyView()
+                }
             } else {
+                let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' - Quiz button hidden: assessmentQuestions is nil")
                 EmptyView()
             }
         }
