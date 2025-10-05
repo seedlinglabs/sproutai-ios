@@ -116,35 +116,70 @@ class DashboardViewModel: ObservableObject {
                     
                     print("[DEBUG][DashboardVM] Processing subjectId=\(subjectId) with \(items.count) records")
                     
-                    let topics: [SproutTopic]
+                    // First, get all topics to know the total count (lightweight call)
+                    let allTopics: [SproutTopic]
                     do {
-                        topics = try await self.topicsService.getTopics(subjectId: subjectId)
-                        print("[DEBUG][DashboardVM] Fetched \(topics.count) topics for subjectId=\(subjectId)")
+                        allTopics = try await self.topicsService.getTopicsLightweight(subjectId: subjectId)
+                        print("[DEBUG][DashboardVM] Fetched \(allTopics.count) total topics (lightweight) for subjectId=\(subjectId)")
                     } catch {
-                        print("[DEBUG][DashboardVM] Failed to fetch topics for subjectId=\(subjectId): \(error)")
-                        topics = []
+                        print("[DEBUG][DashboardVM] Failed to fetch lightweight topics for subjectId=\(subjectId): \(error)")
+                        allTopics = []
                     }
                     
                     if Task.isCancelled { return nil }
                     
-                    let completedSet = Set(items.filter { $0.status == "completed" }.map { $0.topicId })
-                    let completedTopics: [SproutTopicWithCompletion] = topics.filter { completedSet.contains($0.id) }.map { t in
+                    // Identify completed topic IDs from academic records
+                    let completedRecords = items.filter { $0.status == "completed" }
+                    let completedTopicIds = Set(completedRecords.map { $0.topicId })
+                    
+                    print("[DEBUG][DashboardVM] Found \(completedTopicIds.count) completed topic IDs for subjectId=\(subjectId)")
+                    
+                    // Only fetch detailed information for completed topics
+                    var completedTopics: [SproutTopicWithCompletion] = []
+                    
+                    await withTaskGroup(of: SproutTopicWithCompletion?.self) { topicGroup in
+                        for topicId in completedTopicIds {
+                            topicGroup.addTask {
+                                if Task.isCancelled { return nil }
+                                
+                                do {
+                                    if let detailedTopic = try await self.topicsService.getTopic(id: topicId) {
+                                        print("[DEBUG][DashboardVM] Fetched detailed topic: \(detailedTopic.name)")
+                                        
+                                        return SproutTopicWithCompletion(
+                                            id: detailedTopic.id,
+                                            name: detailedTopic.name,
+                                            description: detailedTopic.description,
+                                            subjectId: detailedTopic.subjectId,
+                                            schoolId: detailedTopic.schoolId,
+                                            classId: detailedTopic.classId,
+                                            createdAt: detailedTopic.createdAt,
+                                            updatedAt: detailedTopic.updatedAt,
+                                            aiContent: detailedTopic.aiContent,
+                                            completedAt: completedRecords.first(where: { $0.topicId == topicId })?.updatedAt
+                                        )
+                                    } else {
+                                        print("[DEBUG][DashboardVM] Topic not found: \(topicId)")
+                                        return nil
+                                    }
+                                } catch {
+                                    print("[DEBUG][DashboardVM] Failed to fetch detailed topic \(topicId): \(error)")
+                                    return nil
+                                }
+                            }
+                        }
                         
-                        return SproutTopicWithCompletion(
-                            id: t.id,
-                            name: t.name,
-                            description: t.description,
-                            subjectId: t.subjectId,
-                            schoolId: t.schoolId,
-                            classId: t.classId,
-                            createdAt: t.createdAt,
-                            updatedAt: t.updatedAt,
-                            aiContent: t.aiContent,
-                            completedAt: items.first(where: { $0.topicId == t.id })?.updatedAt
-                        )
+                        for await completedTopic in topicGroup {
+                            if let topic = completedTopic {
+                                completedTopics.append(topic)
+                            }
+                        }
                     }
                     
-                    print("[DEBUG][DashboardVM] Completed topics for subjectId=\(subjectId): \(completedTopics.count)")
+                    // Sort completed topics by name for consistent display
+                    completedTopics.sort { $0.name < $1.name }
+                    
+                    print("[DEBUG][DashboardVM] Successfully loaded \(completedTopics.count) completed topics with full details for subjectId=\(subjectId)")
 
                     let progress = SproutSubjectWithProgress(
                         id: subjectId,
@@ -156,7 +191,7 @@ class DashboardViewModel: ObservableObject {
                         className: items.first.map { "\($0.grade)\($0.section)" },
                         createdAt: items.first?.createdAt ?? "",
                         updatedAt: items.first?.updatedAt ?? "",
-                        totalTopics: topics.count > 0 ? topics.count : nil,
+                        totalTopics: allTopics.count > 0 ? allTopics.count : nil,
                         completedTopics: completedTopics.count,
                         completedTopicsList: completedTopics.isEmpty ? nil : completedTopics
                     )

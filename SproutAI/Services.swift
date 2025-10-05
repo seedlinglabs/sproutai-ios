@@ -260,6 +260,65 @@ class AcademicRecordsService {
 class TopicsService {
     private let baseURL = "https://xvq11x0421.execute-api.us-west-2.amazonaws.com/pre-prod"
     
+    func getTopicsLightweight(subjectId: String) async throws -> [SproutTopic] {
+        print("[DEBUG][TopicsService] Fetching lightweight topics for subjectId=\(subjectId)")
+        
+        guard var urlComponents = URLComponents(string: "\(baseURL)/topics") else {
+            throw URLError(.badURL)
+        }
+        
+        urlComponents.queryItems = [
+            URLQueryItem(name: "subject_id", value: subjectId)
+        ]
+        
+        guard let url = urlComponents.url else {
+            throw URLError(.badURL)
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        
+        print("[DEBUG][TopicsService] Making lightweight request to: \(url)")
+        
+        let (data, response) = try await URLSession.shared.data(for: request)
+        
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        
+        print("[DEBUG][TopicsService] Lightweight response status: \(httpResponse.statusCode)")
+        
+        guard (200...299).contains(httpResponse.statusCode) else {
+            if let errorString = String(data: data, encoding: .utf8) {
+                print("[DEBUG][TopicsService] Error response: \(errorString)")
+            }
+            throw URLError(.badServerResponse)
+        }
+        
+        // Parse the API response
+        let apiTopics = try JSONDecoder().decode([Topic].self, from: data)
+        
+        // Convert API models to our app models but strip out heavy AI content
+        let lightweightTopics = apiTopics.map { apiTopic in
+            SproutTopic(
+                id: apiTopic.id,
+                name: apiTopic.name,
+                description: apiTopic.description,
+                subjectId: apiTopic.subjectId,
+                schoolId: apiTopic.schoolId,
+                classId: apiTopic.classId,
+                createdAt: apiTopic.createdAt,
+                updatedAt: apiTopic.updatedAt,
+                aiContent: nil // Explicitly set to nil to avoid heavy content
+            )
+        }
+        
+        print("[DEBUG][TopicsService] Returning \(lightweightTopics.count) lightweight topics for subjectId=\(subjectId)")
+        return lightweightTopics
+    }
+    
     func getTopics(subjectId: String) async throws -> [SproutTopic] {
         print("[DEBUG][TopicsService] Fetching topics for subjectId=\(subjectId)")
         
