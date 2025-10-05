@@ -83,7 +83,7 @@ struct AIContent: Codable {
         case lessonPlan = "lesson_plan"
         case teachingGuide = "teaching_guide"
         case groupDiscussion = "group_discussion"
-        case assessmentQuestions = "assessment_questions"
+        case assessmentQuestions = "assessmentQuestions"
         case worksheets
         case videos
         case generatedAt = "generated_at"
