@@ -36,10 +36,12 @@ struct Parent: Codable {
 
 struct LoginRequest: Codable {
     let phoneNumber: String
+    let password: String?
     let name: String?
 
     enum CodingKeys: String, CodingKey {
         case phoneNumber = "phone_number"
+        case password
         case name
     }
 }

@@ -346,58 +346,78 @@ struct QuizView: View {
     @StateObject private var quizVM = QuizViewModel()
     @State private var showTextMode = false
     
+    // We'll need access to auth service for the header
+    @EnvironmentObject var authService: AuthService
+    
     var body: some View {
-        NavigationView {
+        VStack(spacing: 0) {
+            // Dashboard header
+            header
+            
+            // Main content
             ZStack {
                 AppTheme.backgroundGradient
                     .ignoresSafeArea()
                 
-                if showTextMode {
-                    QuizTextView(topic: topic, quizVM: quizVM)
-                } else if quizVM.questions.isEmpty {
-                    loadingOrErrorView
-                } else if quizVM.isQuizCompleted {
-                    QuizResultsView(quizVM: quizVM, topic: topic, isPresented: $isPresented)
-                } else {
-                    QuizQuestionView(quizVM: quizVM)
-                }
-            }
-            .navigationTitle(topic.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        isPresented = false
-                    }
-                    .foregroundColor(.white)
-                }
-                
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    HStack(spacing: 12) {
-                        if !quizVM.questions.isEmpty && !quizVM.isQuizCompleted && !showTextMode {
-                            Text("\(quizVM.currentQuestionIndex + 1)/\(quizVM.totalQuestions)")
-                                .foregroundColor(.white)
-                                .font(.caption)
-                        }
+                VStack(spacing: 0) {
+                    // Subtle topic name header
+                    VStack(spacing: 12) {
+                        Text(topic.name)
+                            .font(.headline)
+                            .fontWeight(.medium)
+                            .foregroundColor(.white.opacity(0.9))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(nil)
+                            .padding(.horizontal, 20)
                         
-                        Button(showTextMode ? "Quiz Mode" : "Text Mode") {
-                            showTextMode.toggle()
+                        Rectangle()
+                            .fill(.white.opacity(0.2))
+                            .frame(height: 0.5)
+                            .padding(.horizontal, 40)
+                    }
+                    .padding(.top, 8)
+                    .padding(.bottom, 16)
+                    
+                    // Quiz content
+                    if showTextMode {
+                        QuizTextView(topic: topic, quizVM: quizVM)
+                    } else if quizVM.questions.isEmpty {
+                        VStack {
+                            Spacer()
+                            loadingOrErrorView
+                            Spacer()
+                            textModeLink
                         }
-                        .foregroundColor(.white)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(Color.white.opacity(0.2))
-                        )
+                    } else if quizVM.isQuizCompleted {
+                        VStack {
+                            QuizResultsView(quizVM: quizVM, topic: topic, isPresented: $isPresented)
+                            textModeLink
+                        }
+                    } else {
+                        VStack {
+                            QuizQuestionView(quizVM: quizVM)
+                            textModeLink
+                        }
                     }
                 }
-            }
-            .onAppear {
-                loadQuiz()
             }
         }
+        .navigationBarHidden(true)
+        .onAppear {
+            loadQuiz()
+        }
+    }
+    
+    private var textModeLink: some View {
+        Button(action: {
+            showTextMode.toggle()
+        }) {
+            Text(showTextMode ? "← Back to Quiz" : "View Assessment Text")
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.8))
+                .underline()
+        }
+        .padding(.bottom, 20)
     }
     
     private var loadingOrErrorView: some View {
@@ -439,6 +459,93 @@ struct QuizView: View {
         
         Task {
             await quizVM.loadQuestions(from: assessmentQuestions)
+        }
+    }
+    
+    private var header: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(AppTheme.primary)
+                .frame(height: 0)
+                .ignoresSafeArea(edges: .top)
+            
+            HStack(alignment: .center, spacing: 12) {
+                HStack(spacing: 12) {
+                    Image("SeedlingLabsLogo")
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(width: 36, height: 36)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(Color.white.opacity(0.1))
+                        )
+                    
+                    if let user = authService.parent {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Sprout AI")
+                                .font(.headline)
+                                .fontWeight(.semibold)
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            
+                            Text(getSchoolDisplayName(schoolId: user.schoolId))
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.85))
+                                .lineLimit(2)
+                        }
+                    }
+                }
+                
+                Spacer()
+                
+                HStack(spacing: 16) {
+                    // Show quiz progress in header if in quiz mode
+                    if !quizVM.questions.isEmpty && !quizVM.isQuizCompleted && !showTextMode {
+                        Text("\(quizVM.currentQuestionIndex + 1)/\(quizVM.totalQuestions)")
+                            .foregroundColor(.white)
+                            .font(.caption)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(Color.white.opacity(0.2))
+                            )
+                    }
+                    
+                    Button(action: { 
+                        isPresented = false
+                    }) {
+                        Image(systemName: "house.fill")
+                            .font(.title3)
+                            .foregroundColor(.white)
+                            .frame(width: 24, height: 24)
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
+            .background(
+                LinearGradient(
+                    gradient: Gradient(colors: [AppTheme.primary, AppTheme.primary.opacity(0.9)]),
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .safeAreaInset(edge: .top) { Color.clear.frame(height: 0) }
+        }
+    }
+    
+    private func getSchoolDisplayName(schoolId: String) -> String {
+        switch schoolId {
+        case "content-development-school":
+            return "Content Development School"
+        case "sri-vidyaniketan-international-school-icse":
+            return "Sri Vidyaniketan International School (ICSE)"
+        case "sri-vidyaniketan-public-school-cbse":
+            return "Sri Vidyaniketan Public School (CBSE)"
+        default:
+            return schoolId.replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
 }

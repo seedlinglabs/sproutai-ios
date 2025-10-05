@@ -11,10 +11,11 @@ import SwiftUI
 struct LoginView: View {
     @ObservedObject var authService: AuthService
     @State private var phoneNumber = ""
-    @State private var name = ""
+    @State private var password = ""
     @State private var isLoading = false
     @State private var error: String?
     @State private var showRegistration = false
+    @FocusState private var isPhoneNumberFocused: Bool
     
     var body: some View {
         VStack(spacing: 32) {
@@ -37,31 +38,57 @@ struct LoginView: View {
             .cornerRadius(16)
             
             VStack(spacing: 16) {
-                ZStack(alignment: .leading) {
-                    if phoneNumber.isEmpty {
-                        Text("Phone Number")
-                            .foregroundColor(AppTheme.textPrimary.opacity(0.7))
-                            .padding(.leading, 16)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Phone Number")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.leading, 4)
+                    
+                    ZStack(alignment: .leading) {
+                        if phoneNumber.isEmpty {
+                            Text("Enter your 10-digit phone number")
+                                .foregroundColor(.gray)
+                                .padding(.leading, 16)
+                        }
+                        TextField("", text: $phoneNumber)
+                            .keyboardType(.numberPad)
+                            .textContentType(.telephoneNumber)
+                            .padding()
+                            .foregroundColor(AppTheme.textPrimary)
+                            .background(Color.white)
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(isPhoneNumberFocused ? AppTheme.primary : Color.clear, lineWidth: 2)
+                            )
+                            .focused($isPhoneNumberFocused)
                     }
-                    TextField("", text: $phoneNumber)
-                        .keyboardType(.numberPad)
-                        .textContentType(.telephoneNumber)
-                        .padding()
-                        .foregroundColor(AppTheme.textPrimary)
-                        .background(Color.white)
-                        .cornerRadius(12)
                 }
-                ZStack(alignment: .leading) {
-                    if name.isEmpty {
-                        Text("Name (optional)")
-                            .foregroundColor(AppTheme.textPrimary.opacity(0.7))
-                            .padding(.leading, 16)
+                
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Password")
+                        .font(.subheadline)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white)
+                        .padding(.leading, 4)
+                    
+                    ZStack(alignment: .leading) {
+                        if password.isEmpty {
+                            Text("Enter your password")
+                                .foregroundColor(.gray)
+                                .padding(.leading, 16)
+                        }
+                        SecureField("", text: $password)
+                            .padding()
+                            .foregroundColor(AppTheme.textPrimary)
+                            .background(Color.white)
+                            .cornerRadius(12)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(password.isEmpty ? Color.clear : AppTheme.primary.opacity(0.3), lineWidth: 1)
+                            )
                     }
-                    TextField("", text: $name)
-                        .padding()
-                        .foregroundColor(AppTheme.textPrimary)
-                        .background(Color.white)
-                        .cornerRadius(12)
                 }
             }
             
@@ -78,11 +105,11 @@ struct LoginView: View {
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
                         .padding()
-                        .background((isLoading || phoneNumber.count != 10) ? AppTheme.primary.opacity(0.5) : AppTheme.primary)
+                        .background((isLoading || phoneNumber.count != 10 || password.isEmpty) ? AppTheme.primary.opacity(0.5) : AppTheme.primary)
                         .cornerRadius(12)
                 }
             }
-            .disabled(isLoading || phoneNumber.count != 10)
+            .disabled(isLoading || phoneNumber.count != 10 || password.isEmpty)
             
             if let error = error {
                 Text(error)
@@ -90,30 +117,23 @@ struct LoginView: View {
                     .font(.caption)
             }
             
-            HStack(spacing: 16) {
-                Button(action: { /* TODO: Home action */ }) {
-                    Label("Home", systemImage: "house.fill")
-                        .foregroundColor(AppTheme.textPrimary)
-                        .padding(8)
-                        .background(AppTheme.cardBackground)
-                        .cornerRadius(8)
+            VStack(spacing: 12) {
+                Button("Don't have an account? Register Here") {
+                    showRegistration = true
                 }
-                Button(action: { /* TODO: Help action */ }) {
-                    Label("Help", systemImage: "questionmark.circle")
-                        .foregroundColor(AppTheme.textPrimary)
-                        .padding(8)
-                        .background(AppTheme.cardBackground)
-                        .cornerRadius(8)
-                }
+                .font(.title3)
+                .fontWeight(.medium)
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding()
+                .background(AppTheme.secondary)
+                .cornerRadius(12)
             }
-            
-            Button("Don't have an account? Register Here") {
-                showRegistration = true
-            }
-            .font(.footnote)
-            .foregroundColor(AppTheme.secondary)
         }
         .padding(.horizontal)
+        .onAppear {
+            isPhoneNumberFocused = true
+        }
         .sheet(isPresented: $showRegistration) {
             RegistrationView(authService: authService)
         }
@@ -122,7 +142,7 @@ struct LoginView: View {
     private func handleLogin() {
         isLoading = true
         error = nil
-        authService.login(phoneNumber: phoneNumber, name: name.isEmpty ? nil : name) { result in
+        authService.login(phoneNumber: phoneNumber, password: password) { result in
             DispatchQueue.main.async {
                 isLoading = false
                 switch result {
@@ -153,6 +173,11 @@ struct RegistrationView: View {
     
     let grades = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
     let sections = ["A", "B", "C", "D"]
+    let schoolOptions = [
+        ("content-development-school", "Content Development School"),
+        ("sri-vidyaniketan-international-school-icse", "Sri Vidyaniketan International School (ICSE)"),
+        ("sri-vidyaniketan-public-school-cbse", "Sri Vidyaniketan Public School (CBSE)")
+    ]
     
     var body: some View {
         NavigationView {
@@ -187,8 +212,27 @@ struct RegistrationView: View {
                         SecureField("Password", text: $password)
                             .textFieldStyle(RoundedBorderTextFieldStyle())
                         
-                        TextField("School ID", text: $schoolId)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("School")
+                                .font(.headline)
+                                .foregroundColor(AppTheme.primary)
+                            
+                            Picker("Select School", selection: $schoolId) {
+                                Text("Select a school")
+                                    .tag("")
+                                ForEach(schoolOptions, id: \.0) { option in
+                                    Text(option.1)
+                                        .tag(option.0)
+                                }
+                            }
+                            .pickerStyle(MenuPickerStyle())
+                            .padding()
+                            .background(Color.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(Color.gray.opacity(0.3), lineWidth: 1)
+                            )
+                        }
                     }
                     
                     VStack(alignment: .leading, spacing: 12) {

@@ -225,8 +225,16 @@ struct DashboardView: View {
     @State private var expandedTopics: Set<String> = []
     @State private var selectedTopic: SproutTopicWithCompletion?
     
-    @State private var showVideoPlayer = false
-    @State private var videoURLToPlay: String? = nil
+    @State private var showVideoPlayer = false {
+        didSet {
+            print("[DEBUG][DashboardView] showVideoPlayer changed to: \(showVideoPlayer)")
+        }
+    }
+    @State private var videoURLToPlay: String? = nil {
+        didSet {
+            print("[DEBUG][DashboardView] videoURLToPlay changed to: '\(videoURLToPlay ?? "nil")'")
+        }
+    }
     
     @State private var selectedClass: String? = nil
     
@@ -307,9 +315,59 @@ struct DashboardView: View {
                 get: { selectedTopic != nil },
                 set: { if !$0 { selectedTopic = nil } }
             ))
+            .environmentObject(authService)
         }
         .sheet(isPresented: $showVideoPlayer) {
-            VideoPlayerView(urlString: videoURLToPlay ?? "")
+            let _ = print("[DEBUG][DashboardView] Sheet presented. videoURLToPlay: '\(videoURLToPlay ?? "nil")'")
+            if let videoURL = videoURLToPlay, !videoURL.isEmpty {
+                let _ = print("[DEBUG][DashboardView] Showing VideoPlayerView with URL: '\(videoURL)'")
+                VideoPlayerView(urlString: videoURL)
+            } else {
+                let _ = print("[DEBUG][DashboardView] Showing error view - no valid URL")
+                // Fallback view for invalid URLs
+                NavigationView {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 64))
+                            .foregroundColor(.red)
+                        
+                        Text("No video URL available")
+                            .font(.headline)
+                            .foregroundColor(.red)
+                        
+                        Text("The video URL is missing or invalid.")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                        
+                        // Add debug information
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Debug Info:")
+                                .font(.caption)
+                                .fontWeight(.bold)
+                            Text("videoURLToPlay: '\(videoURLToPlay ?? "nil")'")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                            Text("isEmpty: \(videoURLToPlay?.isEmpty ?? true)")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+                        .padding()
+                        .background(Color.gray.opacity(0.1))
+                        .cornerRadius(8)
+                    }
+                    .padding()
+                    .navigationTitle("Video Error")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Done") {
+                                showVideoPlayer = false
+                                videoURLToPlay = nil
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -339,15 +397,16 @@ struct DashboardView: View {
                     
                     if let user = authService.parent {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Welcome, \(user.name.split(separator: " ").first ?? "")")
+                            Text("Sprout AI")
                                 .font(.headline)
                                 .fontWeight(.semibold)
                                 .foregroundColor(.white)
                                 .lineLimit(1)
                             
-                            Text("\(user.classAccess.count) class\(user.classAccess.count == 1 ? "" : "es")")
+                            Text(getSchoolDisplayName(schoolId: user.schoolId))
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.85))
+                                .lineLimit(2)
                         }
                     }
                 }
@@ -380,6 +439,19 @@ struct DashboardView: View {
                 )
             )
             .safeAreaInset(edge: .top) { Color.clear.frame(height: 0) }
+        }
+    }
+    
+    private func getSchoolDisplayName(schoolId: String) -> String {
+        switch schoolId {
+        case "content-development-school":
+            return "Content Development School"
+        case "sri-vidyaniketan-international-school-icse":
+            return "Sri Vidyaniketan International School (ICSE)"
+        case "sri-vidyaniketan-public-school-cbse":
+            return "Sri Vidyaniketan Public School (CBSE)"
+        default:
+            return schoolId.replacingOccurrences(of: "-", with: " ").capitalized
         }
     }
 }

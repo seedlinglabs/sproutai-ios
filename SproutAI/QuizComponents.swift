@@ -147,25 +147,6 @@ struct QuizQuestionView: View {
                                     .stroke(Color.white.opacity(0.3), lineWidth: 1)
                             )
                     )
-                    
-                    // Show submitted text during results
-                    if quizVM.showResult, let result = quizVM.results.last, let submittedText = result.submittedText {
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Your submitted answer:")
-                                .font(.caption)
-                                .fontWeight(.semibold)
-                                .foregroundColor(AppTheme.secondary)
-                            
-                            Text(submittedText)
-                                .font(.body)
-                                .foregroundColor(.white.opacity(0.9))
-                                .padding(12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .fill(AppTheme.secondary.opacity(0.15))
-                                )
-                        }
-                    }
                 }
                 .padding(20)
                 .background(

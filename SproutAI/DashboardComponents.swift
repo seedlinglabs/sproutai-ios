@@ -188,8 +188,33 @@ struct SubjectCardView: View {
                                 selectedTopic = topic
                             },
                             onVideoTap: { url in
-                                videoURLToPlay = url
-                                showVideoPlayer = true
+                                print("[DEBUG][SubjectCardView] Video URL received: '\(url)'")
+                                print("[DEBUG][SubjectCardView] URL is empty: \(url.isEmpty)")
+                                
+                                // Validate and set the URL synchronously
+                                let trimmedURL = url.trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !trimmedURL.isEmpty else {
+                                    print("[DEBUG][SubjectCardView] ERROR: Empty video URL after trimming")
+                                    return
+                                }
+                                
+                                guard URL(string: trimmedURL) != nil else {
+                                    print("[DEBUG][SubjectCardView] ERROR: Invalid video URL format: '\(trimmedURL)'")
+                                    return
+                                }
+                                
+                                print("[DEBUG][SubjectCardView] Valid URL found, setting state")
+                                // Set both values in the same state update with a small delay
+                                DispatchQueue.main.async {
+                                    print("[DEBUG][SubjectCardView] Setting parent state - videoURLToPlay: '\(trimmedURL)'")
+                                    videoURLToPlay = trimmedURL
+                                    
+                                    // Add a small delay before showing the sheet
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                        showVideoPlayer = true
+                                        print("[DEBUG][SubjectCardView] Parent state set - videoURLToPlay: '\(videoURLToPlay ?? "nil")', showVideoPlayer: \(showVideoPlayer)")
+                                    }
+                                }
                             }
                         )
                     }
@@ -264,10 +289,10 @@ struct TopicAccordionView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(topic.name)
-                    .font(.subheadline)
+                    .font(.caption)
                     .fontWeight(.semibold)
                     .foregroundColor(AppTheme.primary)
-                    .lineLimit(2)
+                    .lineLimit(3)
                     .multilineTextAlignment(.leading)
                 
                 Spacer()
@@ -304,14 +329,33 @@ struct TopicAccordionView: View {
     private var videosSection: some View {
         Group {
             if let videos = topic.aiContent?.videos, !videos.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    ForEach(videos) { video in
+                let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' has \(videos.count) videos")
+                ForEach(videos.enumerated().map { (index, video) in 
+                    let _ = print("[DEBUG][TopicAccordionView] Video \(index): title='\(video.title)', url='\(video.url)' (length: \(video.url.count))")
+                    return video 
+                }) { video in
+                    VStack(alignment: .leading, spacing: 12) {
                         VideoLinkView(video: video) {
-                            onVideoTap(video.url)
+                            print("[DEBUG][TopicAccordionView] Video tapped: '\(video.title)' with URL: '\(video.url)'")
+                            
+                            // TEMPORARY: Add a test URL if the video URL is empty
+                            let testURL = video.url.isEmpty ? "https://www.youtube.com/watch?v=dQw4w9WgXcQ" : video.url
+                            
+                            // Validate the URL before passing it
+                            let trimmedURL = testURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmedURL.isEmpty && URL(string: trimmedURL) != nil {
+                                print("[DEBUG][TopicAccordionView] Valid URL, calling onVideoTap with: '\(trimmedURL)'")
+                                onVideoTap(trimmedURL)
+                            } else {
+                                print("[DEBUG][TopicAccordionView] Invalid video URL: '\(testURL)'")
+                                // Still call onVideoTap with the original URL so the parent can handle the error
+                                onVideoTap(testURL)
+                            }
                         }
                     }
                 }
             } else {
+                let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' has no videos")
                 noVideosMessage
             }
         }

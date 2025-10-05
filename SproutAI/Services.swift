@@ -563,7 +563,7 @@ class AuthService: ObservableObject {
         self.authState = .authenticated
     }
     
-    func login(phoneNumber: String, name: String?, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
+    func login(phoneNumber: String, password: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
         guard let url = URL(string: "\(baseURL)/auth/login") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
@@ -571,7 +571,7 @@ class AuthService: ObservableObject {
         request.timeoutInterval = 15
 
         let normalizedPhone = phoneNumber.filter(\.isNumber)
-        let body = LoginRequest(phoneNumber: normalizedPhone, name: name)
+        let body = LoginRequest(phoneNumber: normalizedPhone, password: password, name: nil)
         
         do {
             request.httpBody = try JSONEncoder().encode(body)
