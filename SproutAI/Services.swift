@@ -80,22 +80,17 @@ struct AIContent: Codable {
     let classLevel: String?
     
     enum CodingKeys: String, CodingKey {
-        case lessonPlan = "lessonPlan"
-        case teachingGuide = "teachingGuide" 
-        case groupDiscussion = "groupDiscussion"
-        case assessmentQuestions = "assessmentQuestions"
+        case lessonPlan = "lesson_plan"
+        case teachingGuide = "teaching_guide"
+        case groupDiscussion = "group_discussion"
+        case assessmentQuestions = "assessment_questions"
         case worksheets
         case videos
-        case generatedAt = "generatedAt"
-        case classLevel = "classLevel"
+        case generatedAt = "generated_at"
+        case classLevel = "class_level"
     }
     
     func toSproutAIContent() -> SproutAIContent {
-        print("[DEBUG][AIContent] Converting to SproutAIContent:")
-        print("[DEBUG][AIContent] - lessonPlan: \(lessonPlan?.prefix(50) ?? "nil")")
-        print("[DEBUG][AIContent] - videos count: \(videos?.count ?? 0)")
-        print("[DEBUG][AIContent] - assessmentQuestions: \(assessmentQuestions?.prefix(100) ?? "nil")")
-        
         return SproutAIContent(
             summary: lessonPlan, // Map lesson plan to summary for compatibility
             videos: videos?.map { $0.toSproutVideo() },
@@ -295,11 +290,6 @@ class TopicsService {
         
         print("[DEBUG][TopicsService] Response status: \(httpResponse.statusCode)")
         
-        // Print the raw response data for debugging
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("[DEBUG][TopicsService] Raw topics response: \(responseString)")
-        }
-        
         guard (200...299).contains(httpResponse.statusCode) else {
             if let errorString = String(data: data, encoding: .utf8) {
                 print("[DEBUG][TopicsService] Error response: \(errorString)")
@@ -350,11 +340,6 @@ class TopicsService {
         }
         
         print("[DEBUG][TopicsService] Response status: \(httpResponse.statusCode)")
-        
-        // Print the raw response data for debugging
-        if let responseString = String(data: data, encoding: .utf8) {
-            print("[DEBUG][TopicsService] Raw topic response: \(responseString)")
-        }
         
         guard (200...299).contains(httpResponse.statusCode) else {
             if httpResponse.statusCode == 404 {
