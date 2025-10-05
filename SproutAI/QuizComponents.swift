@@ -11,6 +11,13 @@ import SwiftUI
 struct QuizQuestionView: View {
     @ObservedObject var quizVM: QuizViewModel
     
+    // Helper function to get option letter for any index
+    private func optionLetter(for index: Int) -> String {
+        let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        guard index < letters.count else { return "\(index + 1)" }
+        return String(letters[letters.index(letters.startIndex, offsetBy: index)])
+    }
+    
     var body: some View {
         VStack(spacing: 0) {
             // Progress bar
@@ -86,9 +93,96 @@ struct QuizQuestionView: View {
     }
     
     private func optionsSection(_ question: QuizQuestion) -> some View {
-        VStack(spacing: 12) {
-            ForEach(question.options.indices, id: \.self) { index in
-                optionButton(option: question.options[index], index: index, question: question)
+        Group {
+            if question.options.isEmpty {
+                // Non-Multiple Choice: Show TextEditor for short/long answer
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Image(systemName: "doc.text.fill")
+                            .foregroundColor(AppTheme.secondary)
+                            .font(.title2)
+                        
+                        Text("Reference Answer")
+                            .font(.headline)
+                            .fontWeight(.semibold)
+                            .foregroundColor(.white)
+                        
+                        Spacer()
+                        
+                        Text("Not Scored")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(AppTheme.secondary)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(AppTheme.secondary.opacity(0.2))
+                            )
+                    }
+                    
+                    ZStack(alignment: .topLeading) {
+                        TextEditor(text: $quizVM.shortAnswerText)
+                            .frame(minHeight: 120)
+                            .padding(12)
+                            .background(Color.clear)
+                            .foregroundColor(.white)
+                            .font(.body)
+                            .disabled(true) // Make read-only for reference answers
+                            .scrollContentBackground(.hidden)
+                        
+                        if quizVM.shortAnswerText.isEmpty && !quizVM.showResult {
+                            Text("Sample answer will appear here...")
+                                .foregroundColor(.white.opacity(0.5))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 20)
+                                .allowsHitTesting(false)
+                        }
+                    }
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.1))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.white.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                    
+                    // Show submitted text during results
+                    if quizVM.showResult, let result = quizVM.results.last, let submittedText = result.submittedText {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Your submitted answer:")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(AppTheme.secondary)
+                            
+                            Text(submittedText)
+                                .font(.body)
+                                .foregroundColor(.white.opacity(0.9))
+                                .padding(12)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(AppTheme.secondary.opacity(0.15))
+                                )
+                        }
+                    }
+                }
+                .padding(20)
+                .background(
+                    RoundedRectangle(cornerRadius: 16)
+                        .fill(Color.white.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 16)
+                                .stroke(AppTheme.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                )
+            } else {
+                // Multiple Choice: Show existing options
+                VStack(spacing: 12) {
+                    ForEach(question.options.indices, id: \.self) { index in
+                        optionButton(option: question.options[index], index: index, question: question)
+                    }
+                }
             }
         }
     }
@@ -101,7 +195,7 @@ struct QuizQuestionView: View {
         }) {
             HStack(spacing: 16) {
                 // Option letter
-                Text(["A", "B", "C", "D"][index])
+                Text(optionLetter(for: index))
                     .font(.headline)
                     .fontWeight(.bold)
                     .foregroundColor(optionTextColor(index: index, question: question))
@@ -215,19 +309,43 @@ struct QuizQuestionView: View {
                 .background(AppTheme.secondary)
                 .cornerRadius(12)
             } else {
-                Button("Submit Answer") {
+                Button(submitButtonText) {
                     quizVM.submitAnswer()
                 }
                 .foregroundColor(.white)
                 .font(.headline)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 16)
-                .background(quizVM.selectedAnswer != nil ? AppTheme.primary : AppTheme.primary.opacity(0.5))
+                .background(isSubmitEnabled ? AppTheme.primary : AppTheme.primary.opacity(0.5))
                 .cornerRadius(12)
-                .disabled(quizVM.selectedAnswer == nil)
+                .disabled(!isSubmitEnabled)
             }
         }
         .padding(.top, 8)
+    }
+    
+    // Computed property to determine if submit button should be enabled
+    private var isSubmitEnabled: Bool {
+        guard let currentQuestion = quizVM.currentQuestion else { return false }
+        
+        if currentQuestion.options.isEmpty {
+            // Non-multiple choice: always enabled (just for viewing reference answer)
+            return true
+        } else {
+            // Multiple choice: check if an answer is selected
+            return quizVM.selectedAnswer != nil
+        }
+    }
+    
+    // Computed property to determine submit button text
+    private var submitButtonText: String {
+        guard let currentQuestion = quizVM.currentQuestion else { return "Submit" }
+        
+        if currentQuestion.options.isEmpty {
+            return "Continue"
+        } else {
+            return "Submit Answer"
+        }
     }
     
     private func explanationSection(_ explanation: String) -> some View {
@@ -269,9 +387,16 @@ struct QuizResultsView: View {
     let topic: SproutTopicWithCompletion
     @Binding var isPresented: Bool
     
+    // Helper function to get option letter for any index
+    private func optionLetter(for index: Int) -> String {
+        let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        guard index < letters.count else { return "\(index + 1)" }
+        return String(letters[letters.index(letters.startIndex, offsetBy: index)])
+    }
+    
     private var scorePercentage: Double {
-        guard quizVM.totalQuestions > 0 else { return 0 }
-        return Double(quizVM.score) / Double(quizVM.totalQuestions)
+        guard quizVM.totalMultipleChoiceQuestions > 0 else { return 0 }
+        return Double(quizVM.score) / Double(quizVM.totalMultipleChoiceQuestions)
     }
     
     private var scoreColor: Color {
@@ -327,7 +452,7 @@ struct QuizResultsView: View {
                         .font(.system(size: 32, weight: .bold))
                         .foregroundColor(.white)
                     
-                    Text("/ \(quizVM.totalQuestions)")
+                    Text("/ \(quizVM.totalMultipleChoiceQuestions)")
                         .font(.headline)
                         .foregroundColor(.white.opacity(0.8))
                 }
@@ -337,6 +462,12 @@ struct QuizResultsView: View {
                 .font(.title)
                 .fontWeight(.bold)
                 .foregroundColor(.white)
+            
+            if quizVM.totalQuestions > quizVM.totalMultipleChoiceQuestions {
+                Text("Multiple Choice Score")
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.7))
+            }
         }
         .padding(24)
         .background(
@@ -394,7 +525,7 @@ struct QuizResultsView: View {
                         .frame(width: 32, height: 32)
                         .background(
                             Circle()
-                                .fill(result.isCorrect ? AppTheme.success : AppTheme.error)
+                                .fill(getResultCircleColor(for: result, question: question))
                         )
                     
                     VStack(alignment: .leading, spacing: 4) {
@@ -405,22 +536,31 @@ struct QuizResultsView: View {
                             .lineLimit(2)
                         
                         HStack {
-                            Text("Your answer: \(["A", "B", "C", "D"][result.selectedAnswer])")
-                                .font(.caption)
-                                .foregroundColor(result.isCorrect ? AppTheme.success : AppTheme.error)
-                            
-                            if !result.isCorrect {
-                                Text("• Correct: \(["A", "B", "C", "D"][question.correctAnswer])")
+                            if question.options.isEmpty {
+                                // Non-multiple choice: show it's informational
+                                Text("Reference answer provided")
                                     .font(.caption)
-                                    .foregroundColor(AppTheme.success)
+                                    .foregroundColor(AppTheme.secondary)
+                                    .italic()
+                            } else {
+                                // Multiple choice: show selected option
+                                Text("Your answer: \(optionLetter(for: result.selectedAnswer))")
+                                    .font(.caption)
+                                    .foregroundColor(result.isCorrect ? AppTheme.success : AppTheme.error)
+                                
+                                if !result.isCorrect {
+                                    Text("• Correct: \(optionLetter(for: question.correctAnswer))")
+                                        .font(.caption)
+                                        .foregroundColor(AppTheme.success)
+                                }
                             }
                         }
                     }
                     
                     Spacer()
                     
-                    Image(systemName: result.isCorrect ? "checkmark.circle.fill" : "xmark.circle.fill")
-                        .foregroundColor(result.isCorrect ? AppTheme.success : AppTheme.error)
+                    Image(systemName: getResultIcon(for: result, question: question))
+                        .foregroundColor(getResultColor(for: result, question: question))
                         .font(.title2)
                 }
                 .padding(.horizontal, 16)
@@ -463,6 +603,37 @@ struct QuizResultsView: View {
             .padding(.vertical, 16)
             .background(AppTheme.secondary)
             .cornerRadius(12)
+        }
+    }
+    
+    // Helper methods for result display
+    private func getResultIcon(for result: QuizResult, question: QuizQuestion) -> String {
+        if question.options.isEmpty {
+            // Non-multiple choice: show document icon for submitted answer
+            return "doc.text.fill"
+        } else {
+            // Multiple choice: show checkmark or x
+            return result.isCorrect ? "checkmark.circle.fill" : "xmark.circle.fill"
+        }
+    }
+    
+    private func getResultColor(for result: QuizResult, question: QuizQuestion) -> Color {
+        if question.options.isEmpty {
+            // Non-multiple choice: use secondary color
+            return AppTheme.secondary
+        } else {
+            // Multiple choice: use success/error color
+            return result.isCorrect ? AppTheme.success : AppTheme.error
+        }
+    }
+    
+    private func getResultCircleColor(for result: QuizResult, question: QuizQuestion) -> Color {
+        if question.options.isEmpty {
+            // Non-multiple choice: use secondary color (answer submitted)
+            return AppTheme.secondary
+        } else {
+            // Multiple choice: use success/error color
+            return result.isCorrect ? AppTheme.success : AppTheme.error
         }
     }
 }

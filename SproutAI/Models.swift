@@ -150,8 +150,17 @@ struct QuizResult: Identifiable {
     let id = UUID()
     let questionId: UUID
     let selectedAnswer: Int
+    let submittedText: String? // NEW: For non-multiple choice answers
     let isCorrect: Bool
     let timeSpent: TimeInterval?
+    
+    init(questionId: UUID, selectedAnswer: Int, submittedText: String? = nil, isCorrect: Bool, timeSpent: TimeInterval?) {
+        self.questionId = questionId
+        self.selectedAnswer = selectedAnswer
+        self.submittedText = submittedText
+        self.isCorrect = isCorrect
+        self.timeSpent = timeSpent
+    }
 }
 
 // Supporting JSON structures for quiz parsing

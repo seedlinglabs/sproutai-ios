@@ -224,7 +224,6 @@ struct DashboardView: View {
     @StateObject private var dashboardVM = DashboardViewModel()
     @State private var expandedTopics: Set<String> = []
     @State private var selectedTopic: SproutTopicWithCompletion?
-    @State private var showQuiz = false
     
     @State private var showVideoPlayer = false
     @State private var videoURLToPlay: String? = nil
@@ -279,7 +278,6 @@ struct DashboardView: View {
                                             subject: subject,
                                             expandedTopics: $expandedTopics,
                                             selectedTopic: $selectedTopic,
-                                            showQuiz: $showQuiz,
                                             videoURLToPlay: $videoURLToPlay,
                                             showVideoPlayer: $showVideoPlayer
                                         )
@@ -304,13 +302,11 @@ struct DashboardView: View {
                 Task { await dashboardVM.loadSubjects(for: user) }
             }
         }
-        .sheet(isPresented: $showQuiz) {
-            if let selectedTopic = selectedTopic {
-                QuizView(topic: selectedTopic, isPresented: $showQuiz)
-            } else {
-                Text("Quiz Coming Soon")
-                    .padding()
-            }
+        .sheet(item: $selectedTopic) { topic in
+            QuizView(topic: topic, isPresented: Binding(
+                get: { selectedTopic != nil },
+                set: { if !$0 { selectedTopic = nil } }
+            ))
         }
         .sheet(isPresented: $showVideoPlayer) {
             VideoPlayerView(urlString: videoURLToPlay ?? "")

@@ -7,6 +7,7 @@
 
 import SwiftUI
 import Combine
+import FoundationModels
 
 // MARK: - Quiz View Model
 @MainActor
@@ -14,6 +15,7 @@ class QuizViewModel: ObservableObject {
     @Published var questions: [QuizQuestion] = []
     @Published var currentQuestionIndex: Int = 0
     @Published var selectedAnswer: Int? = nil
+    @Published var shortAnswerText: String = "" // NEW: For non-multiple choice answers
     @Published var showResult: Bool = false
     @Published var showExplanation: Bool = false
     @Published var results: [QuizResult] = []
@@ -32,16 +34,33 @@ class QuizViewModel: ObservableObject {
     }
     
     var score: Int {
-        results.filter { $0.isCorrect }.count
+        // Only count multiple choice questions (those with options) for scoring
+        let mcResults: [QuizResult] = results.enumerated().compactMap { (index, result) in
+            guard index < questions.count else { return nil }
+            let question = questions[index]
+            return question.options.isEmpty ? nil : result
+        }
+        return mcResults.filter { $0.isCorrect }.count
+    }
+    
+    var totalMultipleChoiceQuestions: Int {
+        questions.filter { !$0.options.isEmpty }.count
     }
     
     var totalQuestions: Int {
         questions.count
     }
     
-    func loadQuestions(from assessmentString: String) {
-        questions = QuizParser.parse(assessmentString)
+    func loadQuestions(from assessmentString: String) async {
+        questions = await QuizParser.parse(assessmentString)
         resetQuiz()
+        
+        // Pre-populate text for the first question if it's non-MC
+        if let firstQuestion = currentQuestion,
+           firstQuestion.options.isEmpty,
+           let explanation = firstQuestion.explanation {
+            shortAnswerText = explanation
+        }
     }
     
     func selectAnswer(_ answerIndex: Int) {
@@ -49,24 +68,46 @@ class QuizViewModel: ObservableObject {
     }
     
     func submitAnswer() {
-        guard let currentQuestion = currentQuestion,
-              let selectedAnswer = selectedAnswer else { return }
+        guard let currentQuestion = currentQuestion else { return }
         
-        let isCorrect = selectedAnswer == currentQuestion.correctAnswer
+        let isMC = !currentQuestion.options.isEmpty
         let timeSpent = Date().timeIntervalSince(questionStartTime)
         
-        let result = QuizResult(
-            questionId: currentQuestion.id,
-            selectedAnswer: selectedAnswer,
-            isCorrect: isCorrect,
-            timeSpent: timeSpent
-        )
-        
-        results.append(result)
-        showResult = true
-        
-        if currentQuestion.explanation != nil {
-            showExplanation = true
+        if isMC {
+            // Handle Multiple Choice
+            guard let selectedAnswer = selectedAnswer else { return }
+            
+            let isCorrect = selectedAnswer == currentQuestion.correctAnswer
+            let result = QuizResult(
+                questionId: currentQuestion.id,
+                selectedAnswer: selectedAnswer,
+                isCorrect: isCorrect,
+                timeSpent: timeSpent
+            )
+            
+            results.append(result)
+            showResult = true
+            
+            if currentQuestion.explanation != nil {
+                showExplanation = true
+            }
+        } else {
+            // Handle Non-Multiple Choice (Reference Answer)
+            // No validation needed since it's just for viewing reference
+            
+            let result = QuizResult(
+                questionId: currentQuestion.id,
+                selectedAnswer: -1, // Placeholder for non-MC
+                submittedText: shortAnswerText, // Pre-populated reference answer
+                isCorrect: false, // Not scored
+                timeSpent: timeSpent
+            )
+            
+            results.append(result)
+            showResult = true
+            
+            // Don't show explanation for non-MC since reference answer is already visible
+            // showExplanation = false (already false by default)
         }
     }
     
@@ -74,9 +115,17 @@ class QuizViewModel: ObservableObject {
         if currentQuestionIndex < questions.count - 1 {
             currentQuestionIndex += 1
             selectedAnswer = nil
+            shortAnswerText = "" // Reset first, then populate if needed
             showResult = false
             showExplanation = false
             questionStartTime = Date()
+            
+            // Pre-populate text for non-MC questions with the explanation/answer
+            if let currentQuestion = currentQuestion,
+               currentQuestion.options.isEmpty,
+               let explanation = currentQuestion.explanation {
+                shortAnswerText = explanation
+            }
         } else {
             isQuizCompleted = true
         }
@@ -85,147 +134,209 @@ class QuizViewModel: ObservableObject {
     func resetQuiz() {
         currentQuestionIndex = 0
         selectedAnswer = nil
+        shortAnswerText = "" // Reset first, then populate if needed
         showResult = false
         showExplanation = false
         results.removeAll()
         isQuizCompleted = false
         startTime = Date()
         questionStartTime = Date()
+        
+        // Pre-populate text for the first question if it's non-MC
+        if let firstQuestion = currentQuestion,
+           firstQuestion.options.isEmpty,
+           let explanation = firstQuestion.explanation {
+            shortAnswerText = explanation
+        }
     }
 }
 
 // MARK: - Quiz Parser
 struct QuizParser {
-    static func parse(_ assessmentString: String) -> [QuizQuestion] {
-        var questions: [QuizQuestion] = []
-        
-        // Try different parsing strategies
-        if let jsonQuestions = parseJSON(assessmentString) {
-            return jsonQuestions
-        } else if let markdownQuestions = parseMarkdown(assessmentString) {
-            return markdownQuestions
-        } else if let plainTextQuestions = parsePlainText(assessmentString) {
-            return plainTextQuestions
+
+    /// The main entry function: Uses on-device AI to convert text to structured questions.
+    static func parse(_ assessmentString: String) async -> [QuizQuestion] {
+        // Input validation
+        let trimmedInput = assessmentString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInput.isEmpty else {
+            print("[DEBUG][QuizParser] Empty assessment string provided")
+            return []
         }
         
-        return questions
+        // Use on-device AI to convert to structured JSON
+        if let aiQuestions = await parseWithFoundationModels(trimmedInput) {
+            // Post-process to ensure proper question type detection
+            return aiQuestions.map { validateAndCleanQuestion($0) }
+        }
+        
+        // If AI parsing fails, return empty array
+        print("[DEBUG][QuizParser] Foundation Models parsing failed, no questions returned.")
+        return []
     }
-    
-    // Parse JSON format
-    private static func parseJSON(_ text: String) -> [QuizQuestion]? {
-        guard let data = text.data(using: .utf8) else { return nil }
+
+    /// Post-processing validation to ensure proper question type detection
+    private static func validateAndCleanQuestion(_ question: QuizQuestion) -> QuizQuestion {
+        // Check if this should be an open-ended question based on the question text
+        let questionText = question.question.lowercased()
+        let openEndedKeywords = [
+            "explain", "describe", "discuss", "write", "list", "give examples",
+            "in your own words", "what do you think", "how would you",
+            "short answer", "long answer", "essay", "paragraph"
+        ]
+        
+        let containsOpenEndedKeyword = openEndedKeywords.contains { keyword in
+            questionText.contains(keyword)
+        }
+        
+        // If the question contains open-ended keywords and has only 1 option, 
+        // it's likely misclassified as MC when it should be open-ended
+        if containsOpenEndedKeyword && question.options.count <= 1 {
+            print("[DEBUG][QuizParser] Converting to open-ended: \(question.question)")
+            return QuizQuestion(
+                question: question.question,
+                options: [], // Clear options
+                correctAnswer: -1, // Set to open-ended indicator
+                explanation: question.explanation
+            )
+        }
+        
+        // If it has 1 option but no open-ended keywords, it might still be misclassified
+        if question.options.count == 1 {
+            print("[DEBUG][QuizParser] Warning: Question with single option detected: \(question.question)")
+            // For safety, convert single-option questions to open-ended
+            return QuizQuestion(
+                question: question.question,
+                options: [], // Clear options
+                correctAnswer: -1, // Set to open-ended indicator
+                explanation: question.explanation
+            )
+        }
+        
+        return question
+    }
+
+    // MARK: - AI-Powered Parsing with Foundation Models
+    @MainActor
+    private static func parseWithFoundationModels(_ assessmentString: String) async -> [QuizQuestion]? {
+        let model = SystemLanguageModel.default
+        
+        // Check if the model is available
+        guard case .available = model.availability else {
+            print("[DEBUG][QuizParser] Foundation Models not available: \(model.availability)")
+            return nil
+        }
+        
+        // --- FINAL REVISED INSTRUCTIONS (SYSTEM ROLE) ---
+        let instructions = """
+        You are an expert data extraction API. Your sole purpose is to convert unstructured quiz text into a VALID JSON array matching the provided schema.
+
+        Schema Rules:
+        1. The object schema is: [{"question": string, "options": [string], "correctAnswer": number, "explanation": string}]
+        2. FOR MULTIPLE CHOICE QUESTIONS (questions with A, B, C, D options listed):
+           - Populate "options" array with the provided choices.
+           - The 'Answer' key might be a letter (A, B, C, D) OR the full correct phrase/word from the options.
+           - If the Answer is a phrase (not a single letter): You MUST search for the phrase within the options list and use its position (0-based index) for "correctAnswer". IGNORE THE FIRST LETTER of the answer phrase; it is not the option letter.
+           - You MUST convert the correct answer (whether letter or phrase) into a **0-based numerical index** for the "correctAnswer" field. (A=0, B=1, C=2, D=3).
+           - TRIPLE-CHECK that the resulting index is correct.
+        3. FOR OPEN-ENDED QUESTIONS (Short Answer/Long Answer/CFU or questions WITHOUT multiple choice options A, B, C, D):
+           - "options" MUST be an empty array ([]).
+           - "correctAnswer" MUST be -1.
+           - Use the 'Sample Answer' or 'Parent Guidance' as the value for the "explanation" field.
+        4. CRITICAL: If you do not see explicit A, B, C, D choice options listed in the question, it is an OPEN-ENDED question and must have empty options array.
+        5. DO NOT include any preamble, markdown formatting (like ```json), or conversational text in the final output. Return ONLY the raw JSON array.
+        """
+        
+        // --- FINAL REVISED PROMPT (USER TASK) ---
+        let prompt = """
+        Parse this assessment text and convert it to a JSON array of quiz questions.
+
+        Example input demonstrating MULTIPLE CHOICE (with A, B, C, D options):
+        **Q1:** What does the text compare science to?
+        A. A mountain
+        B. A star
+        C. A giant jigsaw puzzle
+        D. A flower
+        **Answer:** A giant jigsaw puzzle
+        **Explanation:** The text directly compares science to a giant and unending jigsaw puzzle where every discovery adds another piece.
+
+        Expected JSON output for multiple choice (Answer 'A giant jigsaw puzzle' is Option C = index 2):
+        [
+            {
+                "question": "What does the text compare science to?",
+                "options": ["A mountain", "A star", "A giant jigsaw puzzle", "A flower"],
+                "correctAnswer": 2,
+                "explanation": "The text directly compares science to a giant and unending jigsaw puzzle where every discovery adds another piece."
+            }
+        ]
+
+        Example input demonstrating OPEN-ENDED question (no A, B, C, D options):
+        **Q2:** Explain in your own words what photosynthesis means.
+        **Sample Answer:** Photosynthesis is the process by which plants make their own food using sunlight, water, and carbon dioxide.
+
+        Expected JSON output for open-ended question:
+        [
+            {
+                "question": "Explain in your own words what photosynthesis means.",
+                "options": [],
+                "correctAnswer": -1,
+                "explanation": "Photosynthesis is the process by which plants make their own food using sunlight, water, and carbon dioxide."
+            }
+        ]
+
+        Assessment text to parse:
+        \(assessmentString)
+        """
         
         do {
-            let decoder = JSONDecoder()
-            if let questions = try? decoder.decode([QuizQuestionJSON].self, from: data) {
-                return questions.map { $0.toQuizQuestion() }
-            }
+            let session = LanguageModelSession(instructions: instructions)
             
-            if let wrapper = try? decoder.decode(QuizWrapper.self, from: data) {
-                return wrapper.questions.map { $0.toQuizQuestion() }
-            }
+            let response = try await session.respond(
+                to: prompt,
+                generating: QuizJSONResponse.self
+            )
+            
+            print("[DEBUG][QuizParser] Foundation Models successful.")
+            // Map the AI-decoded models to your final internal model (QuizQuestion)
+            return response.content.questions.map { $0.toQuizQuestion() }
+            
         } catch {
-            print("[DEBUG][QuizParser] JSON parsing failed: \(error)")
+            print("[DEBUG][QuizParser] Foundation Models parsing failed: \(error)")
+            // Log error details for debugging
+            print("[DEBUG][QuizParser] Error type: \(type(of: error))")
+            return nil
         }
-        
-        return nil
     }
     
-    // Parse Markdown format
-    private static func parseMarkdown(_ text: String) -> [QuizQuestion]? {
-        var questions: [QuizQuestion] = []
-        let lines = text.components(separatedBy: .newlines)
-        
-        var currentQuestion: String?
-        var currentOptions: [String] = []
-        var correctAnswer: Int = 0
-        var explanation: String?
-        
-        for line in lines {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            
-            if trimmed.isEmpty { continue }
-            
-            // Question line (starts with number or Q)
-            if trimmed.range(of: #"^\d+\.?\s*"#, options: .regularExpression) != nil ||
-               trimmed.lowercased().hasPrefix("q") ||
-               trimmed.hasSuffix("?") {
-                
-                // Save previous question
-                if let question = currentQuestion, !currentOptions.isEmpty {
-                    questions.append(QuizQuestion(
-                        question: question,
-                        options: currentOptions,
-                        correctAnswer: correctAnswer,
-                        explanation: explanation
-                    ))
-                }
-                
-                // Start new question
-                currentQuestion = trimmed.replacingOccurrences(of: #"^\d+\.?\s*"#, with: "", options: .regularExpression)
-                currentOptions = []
-                correctAnswer = 0
-                explanation = nil
-                
-            } else if trimmed.range(of: #"^[A-D][\)\.]\s*"#, options: .regularExpression) != nil {
-                // Option line (A), B), C., D.
-                let option = trimmed.replacingOccurrences(of: #"^[A-D][\)\.]\s*"#, with: "", options: .regularExpression)
-                currentOptions.append(option)
-                
-                // Check if this is marked as correct answer
-                if trimmed.contains("*") || trimmed.contains("✓") || trimmed.contains("[CORRECT]") {
-                    correctAnswer = currentOptions.count - 1
-                }
-                
-            } else if trimmed.lowercased().hasPrefix("answer:") || trimmed.lowercased().hasPrefix("correct:") {
-                // Extract correct answer
-                let answerPart = trimmed.replacingOccurrences(of: #"^(answer|correct):\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
-                if let answerLetter = answerPart.first?.uppercased(),
-                   let index = ["A", "B", "C", "D"].firstIndex(of: answerLetter) {
-                    correctAnswer = index
-                }
-                
-            } else if trimmed.lowercased().hasPrefix("explanation:") {
-                explanation = trimmed.replacingOccurrences(of: #"^explanation:\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
-            }
-        }
-        
-        // Add last question
-        if let question = currentQuestion, !currentOptions.isEmpty {
-            questions.append(QuizQuestion(
-                question: question,
-                options: currentOptions,
-                correctAnswer: correctAnswer,
-                explanation: explanation
-            ))
-        }
-        
-        return questions.isEmpty ? nil : questions
-    }
+}
+// MARK: - Foundation Models Data Structures
+@Generable(description: "A structured quiz question with options, correct answer, and explanation")
+struct QuizQuestionAI {
+    @Guide(description: "The question text")
+    var question: String
     
-    // Parse plain text format
-    private static func parsePlainText(_ text: String) -> [QuizQuestion]? {
-        let sections = text.components(separatedBy: "\n\n")
-        var questions: [QuizQuestion] = []
-        
-        for section in sections {
-            let lines = section.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            
-            guard lines.count >= 3 else { continue }
-            
-            let question = lines[0]
-            let options = Array(lines[1..<min(lines.count, 5)])
-            
-            questions.append(QuizQuestion(
-                question: question,
-                options: options,
-                correctAnswer: 0,
-                explanation: nil
-            ))
-        }
-        
-        return questions.isEmpty ? nil : questions
+    @Guide(description: "Multiple choice options (empty array for open-ended questions)")
+    var options: [String]
+    
+    @Guide(description: "Index of correct answer (0-based, -1 for open-ended questions)", .range(-1...10))
+    var correctAnswer: Int
+    
+    @Guide(description: "Optional explanation for the answer")
+    var explanation: String?
+    
+    func toQuizQuestion() -> QuizQuestion {
+        QuizQuestion(
+            question: question,
+            options: options,
+            correctAnswer: correctAnswer,
+            explanation: explanation
+        )
     }
+}
+
+@Generable(description: "An array of parsed quiz questions")
+struct QuizJSONResponse {
+    @Guide(description: "Array of quiz questions", .count(1...20))
+    var questions: [QuizQuestionAI]
 }
 
 // MARK: - Quiz Main View
@@ -233,6 +344,7 @@ struct QuizView: View {
     let topic: SproutTopicWithCompletion
     @Binding var isPresented: Bool
     @StateObject private var quizVM = QuizViewModel()
+    @State private var showTextMode = false
     
     var body: some View {
         NavigationView {
@@ -240,7 +352,9 @@ struct QuizView: View {
                 AppTheme.backgroundGradient
                     .ignoresSafeArea()
                 
-                if quizVM.questions.isEmpty {
+                if showTextMode {
+                    QuizTextView(topic: topic, quizVM: quizVM)
+                } else if quizVM.questions.isEmpty {
                     loadingOrErrorView
                 } else if quizVM.isQuizCompleted {
                     QuizResultsView(quizVM: quizVM, topic: topic, isPresented: $isPresented)
@@ -258,11 +372,25 @@ struct QuizView: View {
                     .foregroundColor(.white)
                 }
                 
-                if !quizVM.questions.isEmpty && !quizVM.isQuizCompleted {
-                    ToolbarItem(placement: .navigationBarTrailing) {
-                        Text("\(quizVM.currentQuestionIndex + 1)/\(quizVM.totalQuestions)")
-                            .foregroundColor(.white)
-                            .font(.caption)
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    HStack(spacing: 12) {
+                        if !quizVM.questions.isEmpty && !quizVM.isQuizCompleted && !showTextMode {
+                            Text("\(quizVM.currentQuestionIndex + 1)/\(quizVM.totalQuestions)")
+                                .foregroundColor(.white)
+                                .font(.caption)
+                        }
+                        
+                        Button(showTextMode ? "Quiz Mode" : "Text Mode") {
+                            showTextMode.toggle()
+                        }
+                        .foregroundColor(.white)
+                        .font(.caption)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.white.opacity(0.2))
+                        )
                     }
                 }
             }
@@ -309,8 +437,268 @@ struct QuizView: View {
             return
         }
         
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            quizVM.loadQuestions(from: assessmentQuestions)
+        Task {
+            await quizVM.loadQuestions(from: assessmentQuestions)
         }
+    }
+}
+
+// MARK: - Quiz Text View
+struct QuizTextView: View {
+    let topic: SproutTopicWithCompletion
+    @ObservedObject var quizVM: QuizViewModel
+    @State private var showRawText = true
+    
+    // Helper function to get option letter for any index
+    private func optionLetter(for index: Int) -> String {
+        let letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        guard index < letters.count else { return "\(index + 1)" }
+        return String(letters[letters.index(letters.startIndex, offsetBy: index)])
+    }
+    
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                // Toggle between raw text and parsed questions
+                toggleSection
+                
+                if showRawText {
+                    rawTextSection
+                } else {
+                    parsedQuestionsSection
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 20)
+        }
+    }
+    
+    private var toggleSection: some View {
+        HStack {
+            Button(action: { showRawText = true }) {
+                Text("Raw Text")
+                    .font(.caption)
+                    .fontWeight(showRawText ? .semibold : .regular)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(showRawText ? AppTheme.secondary : Color.white.opacity(0.2))
+                    )
+            }
+            
+            Button(action: { showRawText = false }) {
+                Text("Parsed Questions (\(quizVM.questions.count))")
+                    .font(.caption)
+                    .fontWeight(!showRawText ? .semibold : .regular)
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(!showRawText ? AppTheme.secondary : Color.white.opacity(0.2))
+                    )
+            }
+            
+            Spacer()
+        }
+    }
+    
+    private var rawTextSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Image(systemName: "doc.text")
+                    .foregroundColor(AppTheme.secondary)
+                    .font(.title2)
+                
+                Text("Assessment Questions (Raw Text)")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                
+                Spacer()
+            }
+            
+            if let assessmentQuestions = topic.aiContent?.assessmentQuestions {
+                Text(assessmentQuestions)
+                    .font(.system(.body, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.9))
+                    .padding(16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color.white.opacity(0.1))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                            )
+                    )
+                    .textSelection(.enabled)
+            } else {
+                Text("No assessment questions available")
+                    .font(.body)
+                    .foregroundColor(.white.opacity(0.7))
+                    .italic()
+            }
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(AppTheme.secondary.opacity(0.3), lineWidth: 1)
+                )
+        )
+    }
+    
+    private var parsedQuestionsSection: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            ForEach(quizVM.questions.indices, id: \.self) { index in
+                questionCard(question: quizVM.questions[index], number: index + 1)
+            }
+        }
+    }
+    
+    private func questionCard(question: QuizQuestion, number: Int) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Question header
+            HStack {
+                Text("Question \(number)")
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .foregroundColor(AppTheme.secondary)
+                
+                Spacer()
+                
+                if question.options.isEmpty {
+                    Text("Open Answer")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(AppTheme.secondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(AppTheme.secondary.opacity(0.2))
+                        )
+                } else {
+                    Text("Answer: \(optionLetter(for: question.correctAnswer))")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(AppTheme.success)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(AppTheme.success.opacity(0.2))
+                        )
+                }
+            }
+            
+            // Question text
+            Text(question.question)
+                .font(.body)
+                .fontWeight(.medium)
+                .foregroundColor(.white)
+                .fixedSize(horizontal: false, vertical: true)
+            
+            // Options or Open Answer indicator
+            if question.options.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "pencil.and.outline")
+                            .foregroundColor(AppTheme.secondary)
+                            .font(.caption)
+                        
+                        Text("Open-ended question - requires written response")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(AppTheme.secondary)
+                    }
+                    .padding(12)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(AppTheme.secondary.opacity(0.15))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(AppTheme.secondary.opacity(0.3), lineWidth: 1)
+                            )
+                    )
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(question.options.indices, id: \.self) { optionIndex in
+                        HStack(spacing: 12) {
+                            Text(optionLetter(for: optionIndex))
+                                .font(.caption)
+                                .fontWeight(.bold)
+                                .foregroundColor(optionIndex == question.correctAnswer ? AppTheme.success : .white)
+                                .frame(width: 24, height: 24)
+                                .background(
+                                    Circle()
+                                        .fill(optionIndex == question.correctAnswer ? AppTheme.success.opacity(0.3) : Color.white.opacity(0.2))
+                                        .overlay(
+                                            Circle()
+                                                .stroke(optionIndex == question.correctAnswer ? AppTheme.success : Color.white.opacity(0.4), lineWidth: 1)
+                                        )
+                                )
+                            
+                            Text(question.options[optionIndex])
+                                .font(.body)
+                                .foregroundColor(optionIndex == question.correctAnswer ? AppTheme.success : .white.opacity(0.9))
+                                .fixedSize(horizontal: false, vertical: true)
+                            
+                            Spacer()
+                            
+                            if optionIndex == question.correctAnswer {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(AppTheme.success)
+                                    .font(.caption)
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Explanation (if available)
+            if let explanation = question.explanation {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "lightbulb")
+                            .foregroundColor(AppTheme.secondary)
+                            .font(.caption)
+                        
+                        Text("Explanation")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(AppTheme.secondary)
+                    }
+                    
+                    Text(explanation)
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.8))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(12)
+                .background(
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(AppTheme.secondary.opacity(0.15))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(AppTheme.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                )
+            }
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.15))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                )
+        )
     }
 }

@@ -119,7 +119,6 @@ struct SubjectCardView: View {
     let subject: SproutSubjectWithProgress
     @Binding var expandedTopics: Set<String>
     @Binding var selectedTopic: SproutTopicWithCompletion?
-    @Binding var showQuiz: Bool
     
     @Binding var videoURLToPlay: String?
     @Binding var showVideoPlayer: Bool
@@ -187,7 +186,6 @@ struct SubjectCardView: View {
                             onToggle: { toggleTopic(topic.id) },
                             onQuizTap: {
                                 selectedTopic = topic
-                                showQuiz = true
                             },
                             onVideoTap: { url in
                                 videoURLToPlay = url
