@@ -256,6 +256,125 @@ class AcademicRecordsService {
     }
 }
 
+// MARK: - Learning Assist Service
+class LearningAssistService {
+    private let baseURL = "https://xvq11x0421.execute-api.us-west-2.amazonaws.com/pre-prod"
+    
+    func markTopicAsComplete(topicId: String, userId: String, completion: @escaping (Result<MarkCompleteResponse, Error>) -> Void) {
+        guard let url = URL(string: "\(baseURL)/learning-assist/mark-complete") else { 
+            completion(.failure(URLError(.badURL)))
+            return 
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        
+        let body: [String: Any] = [
+            "topic_id": topicId,
+            "user_id": userId,
+            "completion_timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+        
+        #if DEBUG
+        if let payload = try? JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted]),
+           let payloadString = String(data: payload, encoding: .utf8) {
+            print("[DEBUG][AuthService] OTP send payload:\n\(payloadString)")
+        }
+        #endif
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        } catch {
+            completion(.failure(error))
+            return
+        }
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            
+            print("[DEBUG][LearningAssistService] Mark complete response: \(httpResponse.statusCode)")
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if let data = data, let errorString = String(data: data, encoding: .utf8) {
+                    print("[DEBUG][LearningAssistService] Error response: \(errorString)")
+                }
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            
+            do {
+                let response = try JSONDecoder().decode(MarkCompleteResponse.self, from: data)
+                completion(.success(response))
+            } catch {
+                print("[DEBUG][LearningAssistService] Decoding error: \(error)")
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+    
+    func getLearningProgress(userId: String, completion: @escaping (Result<LearningProgressResponse, Error>) -> Void) {
+        guard let url = URL(string: "\(baseURL)/learning-assist/progress/\(userId)") else { 
+            completion(.failure(URLError(.badURL)))
+            return 
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+        
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                completion(.failure(error))
+                return
+            }
+            
+            guard let httpResponse = response as? HTTPURLResponse else {
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            
+            print("[DEBUG][LearningAssistService] Progress response: \(httpResponse.statusCode)")
+            
+            guard (200...299).contains(httpResponse.statusCode) else {
+                if let data = data, let errorString = String(data: data, encoding: .utf8) {
+                    print("[DEBUG][LearningAssistService] Error response: \(errorString)")
+                }
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            
+            guard let data = data else {
+                completion(.failure(URLError(.badServerResponse)))
+                return
+            }
+            
+            do {
+                let response = try JSONDecoder().decode(LearningProgressResponse.self, from: data)
+                completion(.success(response))
+            } catch {
+                print("[DEBUG][LearningAssistService] Decoding error: \(error)")
+                completion(.failure(error))
+            }
+        }.resume()
+    }
+}
+
 // MARK: - Topics Service
 class TopicsService {
     private let baseURL = "https://xvq11x0421.execute-api.us-west-2.amazonaws.com/pre-prod"
@@ -439,9 +558,54 @@ class AuthService: ObservableObject {
     @Published var token: String? = nil
     
     private let baseURL = "https://xvq11x0421.execute-api.us-west-2.amazonaws.com/pre-prod"
+    private let userDefaults = UserDefaults.standard
+    private let tokenDefaultsKey = "sproutai.auth.token"
+    private let parentDefaultsKey = "sproutai.auth.parent"
+    private var lastOTPRequestId: String?
     
     init() {
         checkAuth()
+    }
+    
+    // MARK: - Session Persistence
+    private func loadPersistedSession() -> (Parent, String)? {
+        guard
+            let storedToken = userDefaults.string(forKey: tokenDefaultsKey),
+            let parentData = userDefaults.data(forKey: parentDefaultsKey)
+        else {
+            return nil
+        }
+        
+        do {
+            let storedParent = try JSONDecoder().decode(Parent.self, from: parentData)
+            return (storedParent, storedToken)
+        } catch {
+            print("[DEBUG][AuthService] Failed to decode stored parent: \(error)")
+            userDefaults.removeObject(forKey: parentDefaultsKey)
+            return nil
+        }
+    }
+    
+    private func persistSession(parent: Parent, token: String) {
+        do {
+            let encodedParent = try JSONEncoder().encode(parent)
+            userDefaults.set(encodedParent, forKey: parentDefaultsKey)
+            userDefaults.set(token, forKey: tokenDefaultsKey)
+        } catch {
+            print("[DEBUG][AuthService] Failed to persist parent: \(error)")
+        }
+    }
+    
+    private func clearPersistedSession() {
+        userDefaults.removeObject(forKey: parentDefaultsKey)
+        userDefaults.removeObject(forKey: tokenDefaultsKey)
+    }
+    
+    private func handleExpiredSession() {
+        clearPersistedSession()
+        parent = nil
+        token = nil
+        authState = .unauthenticated
     }
     
     // MARK: - Networking Helpers
@@ -505,12 +669,33 @@ class AuthService: ObservableObject {
     func checkAuth() {
         print("[DEBUG][AuthService] Checking authentication state...")
         
-        // Add a small delay to show the checking state briefly
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            // TODO: Implement secure token check with Keychain
-            // For now, always start unauthenticated
-            print("[DEBUG][AuthService] Setting state to unauthenticated")
-            self.authState = .unauthenticated
+        if let (storedParent, storedToken) = loadPersistedSession() {
+            print("[DEBUG][AuthService] Restoring persisted session for user: \(storedParent.userId)")
+            parent = storedParent
+            token = storedToken
+            authState = .authenticated
+            
+            verifyToken(token: storedToken) { [weak self] result in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success:
+                        print("[DEBUG][AuthService] Token verification succeeded for stored session")
+                    case .failure(let error as NSError):
+                        if error.domain == "APIError", error.code == 401 {
+                            print("[DEBUG][AuthService] Stored token invalid or expired")
+                            self.handleExpiredSession()
+                        } else {
+                            print("[DEBUG][AuthService] Token verification failed but keeping cached session: \(error.localizedDescription)")
+                        }
+                    case .failure(let error):
+                        print("[DEBUG][AuthService] Token verification failed but keeping cached session: \(error.localizedDescription)")
+                    }
+                }
+            }
+        } else {
+            print("[DEBUG][AuthService] No persisted session found; requiring login")
+            authState = .unauthenticated
         }
     }
     
@@ -537,7 +722,8 @@ class AuthService: ObservableObject {
                 
                 guard (200...299).contains(httpResponse.statusCode) else {
                     if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
-                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: apiError.error])))
+                        let message = apiError.displayMessage
+                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: message])))
                     } else {
                         completion(.failure(NSError(domain: "HTTPError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Token verification failed"])))
                     }
@@ -546,7 +732,7 @@ class AuthService: ObservableObject {
                 
                 do {
                     let parent = try JSONDecoder().decode(Parent.self, from: data)
-                    DispatchQueue.main.async {
+                    Task { @MainActor in
                         self.setAuthenticated(parent: parent, token: token)
                     }
                     completion(.success(parent))
@@ -560,21 +746,82 @@ class AuthService: ObservableObject {
     func setAuthenticated(parent: Parent, token: String) {
         self.parent = parent
         self.token = token
+        persistSession(parent: parent, token: token)
         self.authState = .authenticated
     }
     
-    func login(phoneNumber: String, password: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
+    func login(identifier: String, password: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
         guard let url = URL(string: "\(baseURL)/auth/login") else { return }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 15
-
-        let normalizedPhone = phoneNumber.filter(\.isNumber)
-        let body = LoginRequest(phoneNumber: normalizedPhone, password: password, name: nil)
         
+        let trimmedIdentifier = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        let numericOnly = trimmedIdentifier.filter(\.isNumber)
+        let looksLikeEmail = trimmedIdentifier.contains("@")
+        
+        var body: [String: Any] = [
+            "password": password,
+            "device_type": "ios",
+            "device_id": UIDevice.current.identifierForVendor?.uuidString ?? "unknown",
+            "app_version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        ]
+
+        // Handle email login
+        if looksLikeEmail {
+            body["email"] = trimmedIdentifier.lowercased()
+            body["login_with"] = "email"
+        }
+        // Handle phone login
+        else if numericOnly.count >= 6 {
+            // Format phone number with country code
+            let phoneWithCode: String
+            if numericOnly.count == 10 {
+                // Indian 10-digit number - add +91 prefix
+                phoneWithCode = "+91\(numericOnly)"
+                body["country_code"] = "+91"
+            } else if numericOnly.hasPrefix("91") && numericOnly.count == 12 {
+                // Already has 91 prefix - add +
+                phoneWithCode = "+\(numericOnly)"
+                body["country_code"] = "+91"
+            } else if numericOnly.hasPrefix("+") {
+                // Already properly formatted
+                phoneWithCode = numericOnly
+            } else {
+                // Unknown format - try as-is with +91
+                phoneWithCode = "+91\(numericOnly)"
+                body["country_code"] = "+91"
+            }
+            
+            body["phone_number"] = phoneWithCode
+            body["phone"] = phoneWithCode
+            body["user_type"] = "parent"
+            body["login_with"] = "phone"
+        }
+
+        guard body["email"] != nil || body["phone_number"] != nil else {
+            completion(.failure(NSError(
+                domain: "AuthValidation",
+                code: 422,
+                userInfo: [NSLocalizedDescriptionKey: "Enter a valid email address or phone number."]
+            )))
+            return
+        }
+
+#if DEBUG
+        print("[DEBUG][AuthService] ===== LOGIN REQUEST =====")
+        print("[DEBUG][AuthService] URL: \(url.absoluteString)")
+        if let debugPayload = try? JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys]),
+           let payloadString = String(data: debugPayload, encoding: .utf8) {
+            print("[DEBUG][AuthService] Request Body:")
+            print(payloadString)
+        }
+        print("[DEBUG][AuthService] ============================")
+#endif
+
         do {
-            request.httpBody = try JSONEncoder().encode(body)
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
         } catch {
             completion(.failure(error))
             return
@@ -589,7 +836,8 @@ class AuthService: ObservableObject {
 
                 guard (200...299).contains(httpResponse.statusCode) else {
                     if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
-                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: apiError.error])))
+                        let message = apiError.displayMessage
+                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: message])))
                     } else {
                         completion(.failure(NSError(domain: "HTTPError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Request failed with status \(httpResponse.statusCode)"])))
                     }
@@ -598,7 +846,7 @@ class AuthService: ObservableObject {
 
                 do {
                     let resp = try JSONDecoder().decode(AuthResponse.self, from: data)
-                    DispatchQueue.main.async {
+                    Task { @MainActor in
                         self.setAuthenticated(parent: resp.user, token: resp.token)
                     }
                     completion(.success(resp))
@@ -644,7 +892,8 @@ class AuthService: ObservableObject {
 
                 guard (200...299).contains(httpResponse.statusCode) else {
                     if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
-                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: apiError.error])))
+                        let message = apiError.displayMessage
+                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: message])))
                     } else {
                         completion(.failure(NSError(domain: "HTTPError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Request failed with status \(httpResponse.statusCode)"])))
                     }
@@ -653,7 +902,7 @@ class AuthService: ObservableObject {
 
                 do {
                     let resp = try JSONDecoder().decode(AuthResponse.self, from: data)
-                    DispatchQueue.main.async {
+                    Task { @MainActor in
                         self.setAuthenticated(parent: resp.user, token: resp.token)
                     }
                     completion(.success(resp))
@@ -664,13 +913,204 @@ class AuthService: ObservableObject {
         }
     }
     
+    // MARK: - OTP Login Methods
+    func sendOTP(phoneNumber: String, completion: @escaping (Result<OTPResponse, Error>) -> Void) {
+        let normalizedPhone = phoneNumber.filter(\.isNumber)
+        
+        guard normalizedPhone.count >= 6 else {
+            completion(.failure(NSError(
+                domain: "AuthValidation",
+                code: 422,
+                userInfo: [NSLocalizedDescriptionKey: "Enter a valid phone number before requesting an OTP."]
+            )))
+            return
+        }
+        
+        guard let url = URL(string: "\(baseURL)/auth/send-otp") else { return }
+        lastOTPRequestId = nil
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+
+        // Format phone number with country code
+        let phoneWithCode: String
+        if normalizedPhone.count == 10 {
+            // Indian 10-digit number - add +91 prefix
+            phoneWithCode = "+91\(normalizedPhone)"
+        } else if normalizedPhone.hasPrefix("91") && normalizedPhone.count == 12 {
+            // Already has 91 prefix - add +
+            phoneWithCode = "+\(normalizedPhone)"
+        } else {
+            // Unknown format - try as-is with +91
+            phoneWithCode = "+91\(normalizedPhone)"
+        }
+        
+        var body: [String: Any] = [
+            "phone_number": phoneWithCode,
+            "phone": phoneWithCode,
+            "country_code": "+91",
+            "user_type": "parent",
+            "device_type": "ios",
+            "device_id": UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+        ]
+
+#if DEBUG
+        print("[DEBUG][AuthService] ===== SEND OTP REQUEST =====")
+        print("[DEBUG][AuthService] URL: \(url.absoluteString)")
+        if let debugPayload = try? JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys]),
+           let payloadString = String(data: debugPayload, encoding: .utf8) {
+            print("[DEBUG][AuthService] Request Body:")
+            print(payloadString)
+        }
+        print("[DEBUG][AuthService] =================================")
+#endif
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        self.requestWithRetry(request, attempts: 3, initialBackoff: 0.5) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let (data, httpResponse)):
+                print("[DEBUG] OTP send response: \(httpResponse.statusCode)")
+                print("[DEBUG] Raw response: \n" + (String(data: data, encoding: .utf8) ?? "(not UTF-8)"))
+
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                        let message = apiError.displayMessage
+                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: message])))
+                    } else {
+                        completion(.failure(NSError(domain: "HTTPError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Request failed with status \(httpResponse.statusCode)"])))
+                    }
+                    return
+                }
+
+                do {
+                    let resp = try JSONDecoder().decode(OTPResponse.self, from: data)
+                    if resp.success {
+                        self.lastOTPRequestId = resp.otpId
+                    }
+                    completion(.success(resp))
+                } catch {
+                    print("[DEBUG] OTP send decoding error: \(error)")
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+    
+    func verifyOTP(phoneNumber: String, otp: String, completion: @escaping (Result<AuthResponse, Error>) -> Void) {
+        let normalizedPhone = phoneNumber.filter(\.isNumber)
+        
+        guard normalizedPhone.count >= 6 else {
+            completion(.failure(NSError(
+                domain: "AuthValidation",
+                code: 422,
+                userInfo: [NSLocalizedDescriptionKey: "Enter the phone number used to request the OTP."]
+            )))
+            return
+        }
+        
+        guard otp.trimmingCharacters(in: .whitespacesAndNewlines).count >= 4 else {
+            completion(.failure(NSError(
+                domain: "AuthValidation",
+                code: 422,
+                userInfo: [NSLocalizedDescriptionKey: "Enter the 4 or 6 digit OTP sent to your phone."]
+            )))
+            return
+        }
+        
+        guard let url = URL(string: "\(baseURL)/auth/verify-otp") else { return }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 15
+
+        // Format phone number with country code (same as sendOTP)
+        let phoneWithCode: String
+        if normalizedPhone.count == 10 {
+            phoneWithCode = "+91\(normalizedPhone)"
+        } else if normalizedPhone.hasPrefix("91") && normalizedPhone.count == 12 {
+            phoneWithCode = "+\(normalizedPhone)"
+        } else {
+            phoneWithCode = "+91\(normalizedPhone)"
+        }
+
+        var body: [String: Any] = [
+            "phone_number": phoneWithCode,
+            "phone": phoneWithCode,
+            "otp": otp,
+            "country_code": "+91",
+            "user_type": "parent",
+            "device_type": "ios",
+            "device_id": UIDevice.current.identifierForVendor?.uuidString ?? "unknown"
+        ]
+        
+        if let otpId = lastOTPRequestId {
+            body["otp_id"] = otpId
+        }
+        
+#if DEBUG
+        print("[DEBUG][AuthService] ===== VERIFY OTP REQUEST =====")
+        print("[DEBUG][AuthService] URL: \(url.absoluteString)")
+        if let payload = try? JSONSerialization.data(withJSONObject: body, options: [.prettyPrinted, .sortedKeys]),
+           let payloadString = String(data: payload, encoding: .utf8) {
+            print("[DEBUG][AuthService] Request Body:")
+            print(payloadString)
+        }
+        print("[DEBUG][AuthService] ====================================")
+#endif
+        
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        } catch {
+            completion(.failure(error))
+            return
+        }
+
+        self.requestWithRetry(request, attempts: 3, initialBackoff: 0.5) { result in
+            switch result {
+            case .failure(let error):
+                completion(.failure(error))
+            case .success(let (data, httpResponse)):
+                print("[DEBUG] OTP verify response: \(httpResponse.statusCode)")
+                print("[DEBUG] Raw response: \n" + (String(data: data, encoding: .utf8) ?? "(not UTF-8)"))
+
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
+                        let message = apiError.displayMessage
+                        completion(.failure(NSError(domain: "APIError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: message])))
+                    } else {
+                        completion(.failure(NSError(domain: "HTTPError", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Request failed with status \(httpResponse.statusCode)"])))
+                    }
+                    return
+                }
+
+                do {
+                    let resp = try JSONDecoder().decode(AuthResponse.self, from: data)
+                    Task { @MainActor in
+                        self.setAuthenticated(parent: resp.user, token: resp.token)
+                    }
+                    self.lastOTPRequestId = nil
+                    completion(.success(resp))
+                } catch {
+                    print("[DEBUG] OTP verify decoding error: \(error)")
+                    completion(.failure(error))
+                }
+            }
+        }
+    }
+    
     func logout() {
         let currentToken = self.token
         
-        // TODO: Implement Keychain token removal
-        self.parent = nil
-        self.token = nil
-        self.authState = .unauthenticated
+        handleExpiredSession()
 
         guard let token = currentToken, let url = URL(string: "\(baseURL)/auth/logout") else { return }
         var request = URLRequest(url: url)
@@ -687,7 +1127,7 @@ class AuthService: ObservableObject {
                 print("[DEBUG] Raw response: \n" + (String(data: data, encoding: .utf8) ?? "(not UTF-8)"))
                 if !(200...299).contains(httpResponse.statusCode) {
                     if let apiError = try? JSONDecoder().decode(APIErrorResponse.self, from: data) {
-                        print("[DEBUG] Logout API error: \(apiError.error)")
+                        print("[DEBUG] Logout API error: \(apiError.displayMessage)")
                     }
                 }
             }

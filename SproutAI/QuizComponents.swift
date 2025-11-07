@@ -95,30 +95,32 @@ struct QuizQuestionView: View {
     private func optionsSection(_ question: QuizQuestion) -> some View {
         Group {
             if question.options.isEmpty {
-                // Non-Multiple Choice: Show TextEditor for short/long answer
+                // Non-Multiple Choice: Show TextEditor for student to type their answer
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Image(systemName: "doc.text.fill")
+                        Image(systemName: "pencil.line")
                             .foregroundColor(AppTheme.secondary)
                             .font(.title2)
                         
-                        Text("Reference Answer")
+                        Text(quizVM.showResult ? "Your Answer" : "Type Your Answer")
                             .font(.headline)
                             .fontWeight(.semibold)
                             .foregroundColor(.white)
                         
                         Spacer()
                         
-                        Text("Not Scored")
-                            .font(.caption)
-                            .fontWeight(.semibold)
-                            .foregroundColor(AppTheme.secondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(AppTheme.secondary.opacity(0.2))
-                            )
+                        if !quizVM.showResult {
+                            Text("Write your response")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .foregroundColor(AppTheme.secondary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 6)
+                                        .fill(AppTheme.secondary.opacity(0.2))
+                                )
+                        }
                     }
                     
                     ZStack(alignment: .topLeading) {
@@ -128,11 +130,11 @@ struct QuizQuestionView: View {
                             .background(Color.clear)
                             .foregroundColor(.white)
                             .font(.body)
-                            .disabled(true) // Make read-only for reference answers
+                            .disabled(quizVM.showResult) // Only disable after submission
                             .scrollContentBackground(.hidden)
                         
                         if quizVM.shortAnswerText.isEmpty && !quizVM.showResult {
-                            Text("Sample answer will appear here...")
+                            Text("Type your answer here...")
                                 .foregroundColor(.white.opacity(0.5))
                                 .padding(.horizontal, 16)
                                 .padding(.vertical, 20)
@@ -141,12 +143,46 @@ struct QuizQuestionView: View {
                     }
                     .background(
                         RoundedRectangle(cornerRadius: 12)
-                            .fill(Color.white.opacity(0.1))
+                            .fill(quizVM.showResult ? Color.white.opacity(0.05) : Color.white.opacity(0.1))
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12)
                                     .stroke(Color.white.opacity(0.3), lineWidth: 1)
                             )
                     )
+                    
+                    // Show reference answer after submission
+                    if quizVM.showResult, let explanation = question.explanation {
+                        Divider()
+                            .background(Color.white.opacity(0.3))
+                            .padding(.vertical, 8)
+                        
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Image(systemName: "doc.text.fill")
+                                    .foregroundColor(AppTheme.success)
+                                    .font(.title3)
+                                
+                                Text("Reference Answer")
+                                    .font(.subheadline)
+                                    .fontWeight(.semibold)
+                                    .foregroundColor(.white)
+                            }
+                            
+                            Text(explanation)
+                                .font(.body)
+                                .foregroundColor(.white.opacity(0.9))
+                                .padding(12)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(AppTheme.success.opacity(0.1))
+                                        .overlay(
+                                            RoundedRectangle(cornerRadius: 8)
+                                                .stroke(AppTheme.success.opacity(0.3), lineWidth: 1)
+                                        )
+                                )
+                        }
+                    }
                 }
                 .padding(20)
                 .background(
@@ -367,6 +403,10 @@ struct QuizResultsView: View {
     @ObservedObject var quizVM: QuizViewModel
     let topic: SproutTopicWithCompletion
     @Binding var isPresented: Bool
+    @EnvironmentObject var authService: AuthService
+    @State private var isMarkingComplete = false
+    @State private var showCompletionAlert = false
+    @State private var completionMessage = ""
     
     // Helper function to get option letter for any index
     private func optionLetter(for index: Int) -> String {
@@ -403,6 +443,9 @@ struct QuizResultsView: View {
                 // Performance message
                 messageSection
                 
+                // Per-question metrics
+                metricsSection
+                
                 // Detailed results
                 detailedResultsSection
                 
@@ -412,6 +455,88 @@ struct QuizResultsView: View {
             .padding(.horizontal, 16)
             .padding(.top, 32)
         }
+    }
+    
+    private var metricsSection: some View {
+        let metrics = QuizMetrics(
+            results: quizVM.results,
+            totalTime: Date().timeIntervalSince(quizVM.startTime)
+        )
+        
+        return VStack(spacing: 16) {
+            HStack {
+                Image(systemName: "chart.bar.fill")
+                    .foregroundColor(AppTheme.secondary)
+                    .font(.title2)
+                
+                Text("Quiz Metrics")
+                    .font(.headline)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.white)
+                
+                Spacer()
+                
+                Text(metrics.status)
+                    .font(.caption)
+                    .fontWeight(.bold)
+                    .foregroundColor(metrics.passed ? AppTheme.success : AppTheme.error)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill((metrics.passed ? AppTheme.success : AppTheme.error).opacity(0.2))
+                    )
+            }
+            
+            // Metrics grid
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                MetricCard(
+                    title: "Correct",
+                    value: "\(metrics.correctAnswers)",
+                    icon: "checkmark.circle.fill",
+                    color: AppTheme.success
+                )
+                
+                MetricCard(
+                    title: "Incorrect",
+                    value: "\(metrics.incorrectAnswers)",
+                    icon: "xmark.circle.fill",
+                    color: AppTheme.error
+                )
+                
+                MetricCard(
+                    title: "Score",
+                    value: "\(Int(metrics.scorePercentage))%",
+                    icon: "chart.pie.fill",
+                    color: scoreColor
+                )
+                
+                MetricCard(
+                    title: "Avg Time",
+                    value: formatTime(metrics.averageTimePerQuestion),
+                    icon: "clock.fill",
+                    color: AppTheme.secondary
+                )
+            }
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 16)
+                .fill(Color.white.opacity(0.1))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 16)
+                        .stroke(AppTheme.secondary.opacity(0.3), lineWidth: 1)
+                )
+        )
+    }
+    
+    private func formatTime(_ timeInterval: TimeInterval) -> String {
+        let minutes = Int(timeInterval) / 60
+        let seconds = Int(timeInterval) % 60
+        if minutes > 0 {
+            return "\(minutes)m \(seconds)s"
+        }
+        return "\(seconds)s"
     }
     
     private var scoreSection: some View {
@@ -565,6 +690,29 @@ struct QuizResultsView: View {
     
     private var actionButtons: some View {
         VStack(spacing: 12) {
+            // Mark as Complete button (only show if score is good enough)
+            if scorePercentage >= 0.6 {
+                Button(action: markTopicAsComplete) {
+                    HStack {
+                        if isMarkingComplete {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                .scaleEffect(0.8)
+                        } else {
+                            Image(systemName: "checkmark.circle.fill")
+                        }
+                        Text(isMarkingComplete ? "Marking Complete..." : "Mark as Complete")
+                    }
+                }
+                .foregroundColor(.white)
+                .font(.headline)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(AppTheme.success)
+                .cornerRadius(12)
+                .disabled(isMarkingComplete)
+            }
+            
             Button("Try Again") {
                 quizVM.resetQuiz()
             }
@@ -584,6 +732,39 @@ struct QuizResultsView: View {
             .padding(.vertical, 16)
             .background(AppTheme.secondary)
             .cornerRadius(12)
+        }
+        .alert("Topic Completion", isPresented: $showCompletionAlert) {
+            Button("OK") {
+                isPresented = false
+            }
+        } message: {
+            Text(completionMessage)
+        }
+    }
+    
+    private func markTopicAsComplete() {
+        guard let userId = authService.parent?.userId else {
+            completionMessage = "User not authenticated"
+            showCompletionAlert = true
+            return
+        }
+        
+        isMarkingComplete = true
+        
+        let learningAssistService = LearningAssistService()
+        learningAssistService.markTopicAsComplete(topicId: topic.id, userId: userId) { result in
+            DispatchQueue.main.async {
+                isMarkingComplete = false
+                
+                switch result {
+                case .success(let response):
+                    completionMessage = response.message
+                    showCompletionAlert = true
+                case .failure(let error):
+                    completionMessage = "Failed to mark topic as complete: \(error.localizedDescription)"
+                    showCompletionAlert = true
+                }
+            }
         }
     }
     
@@ -616,5 +797,40 @@ struct QuizResultsView: View {
             // Multiple choice: use success/error color
             return result.isCorrect ? AppTheme.success : AppTheme.error
         }
+    }
+}
+
+// MARK: - Metric Card Component
+struct MetricCard: View {
+    let title: String
+    let value: String
+    let icon: String
+    let color: Color
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title)
+                .foregroundColor(color)
+            
+            Text(value)
+                .font(.title2)
+                .fontWeight(.bold)
+                .foregroundColor(.white)
+            
+            Text(title)
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.7))
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 12)
+                .fill(Color.white.opacity(0.05))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(color.opacity(0.3), lineWidth: 1)
+                )
+        )
     }
 }

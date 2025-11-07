@@ -115,17 +115,10 @@ class QuizViewModel: ObservableObject {
         if currentQuestionIndex < questions.count - 1 {
             currentQuestionIndex += 1
             selectedAnswer = nil
-            shortAnswerText = "" // Reset first, then populate if needed
+            shortAnswerText = "" // Always start with empty text
             showResult = false
             showExplanation = false
             questionStartTime = Date()
-            
-            // Pre-populate text for non-MC questions with the explanation/answer
-            if let currentQuestion = currentQuestion,
-               currentQuestion.options.isEmpty,
-               let explanation = currentQuestion.explanation {
-                shortAnswerText = explanation
-            }
         } else {
             isQuizCompleted = true
         }
@@ -134,20 +127,13 @@ class QuizViewModel: ObservableObject {
     func resetQuiz() {
         currentQuestionIndex = 0
         selectedAnswer = nil
-        shortAnswerText = "" // Reset first, then populate if needed
+        shortAnswerText = "" // Always start with empty text
         showResult = false
         showExplanation = false
         results.removeAll()
         isQuizCompleted = false
         startTime = Date()
         questionStartTime = Date()
-        
-        // Pre-populate text for the first question if it's non-MC
-        if let firstQuestion = currentQuestion,
-           firstQuestion.options.isEmpty,
-           let explanation = firstQuestion.explanation {
-            shortAnswerText = explanation
-        }
     }
 }
 

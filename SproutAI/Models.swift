@@ -19,7 +19,7 @@ struct Parent: Codable {
     let isActive: Bool?
     let createdAt: String?
     let lastLogin: String?
-
+     
     enum CodingKeys: String, CodingKey {
         case userId = "user_id"
         case email
@@ -50,11 +50,38 @@ struct AuthResponse: Codable {
     let success: Bool?
     let user: Parent
     let token: String
-    let message: String
+    let message: String?
 }
 
 struct APIErrorResponse: Codable {
-    let error: String
+    let error: String?
+    let message: String?
+    let details: String?
+    
+    var displayMessage: String {
+        if let error = error?.trimmedNonEmpty { return error }
+        if let message = message?.trimmedNonEmpty { return message }
+        if let details = details?.trimmedNonEmpty { return details }
+        return "Something went wrong. Please try again."
+    }
+}
+
+private extension String {
+    var trimmedNonEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+struct OTPResponse: Codable {
+    let success: Bool
+    let message: String
+    let otpId: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case success, message
+        case otpId = "otp_id"
+    }
 }
 
 enum AuthState {
@@ -152,16 +179,46 @@ struct QuizResult: Identifiable {
     let id = UUID()
     let questionId: UUID
     let selectedAnswer: Int
-    let submittedText: String? // NEW: For non-multiple choice answers
+    let submittedText: String? // For non-multiple choice answers
     let isCorrect: Bool
     let timeSpent: TimeInterval?
+    var attemptCount: Int = 1 // Track number of attempts per question
     
-    init(questionId: UUID, selectedAnswer: Int, submittedText: String? = nil, isCorrect: Bool, timeSpent: TimeInterval?) {
+    init(questionId: UUID, selectedAnswer: Int, submittedText: String? = nil, isCorrect: Bool, timeSpent: TimeInterval?, attemptCount: Int = 1) {
         self.questionId = questionId
         self.selectedAnswer = selectedAnswer
         self.submittedText = submittedText
         self.isCorrect = isCorrect
         self.timeSpent = timeSpent
+        self.attemptCount = attemptCount
+    }
+}
+
+// Quiz metrics for displaying per-question statistics
+struct QuizMetrics {
+    let totalQuestions: Int
+    let correctAnswers: Int
+    let incorrectAnswers: Int
+    let averageTimePerQuestion: TimeInterval
+    let totalTime: TimeInterval
+    let scorePercentage: Double
+    let passThreshold: Double = 70.0
+    
+    var passed: Bool {
+        scorePercentage >= passThreshold
+    }
+    
+    var status: String {
+        passed ? "Passed" : "Failed"
+    }
+    
+    init(results: [QuizResult], totalTime: TimeInterval) {
+        self.totalQuestions = results.count
+        self.correctAnswers = results.filter(\.isCorrect).count
+        self.incorrectAnswers = totalQuestions - correctAnswers
+        self.totalTime = totalTime
+        self.averageTimePerQuestion = totalQuestions > 0 ? totalTime / Double(totalQuestions) : 0
+        self.scorePercentage = totalQuestions > 0 ? (Double(correctAnswers) / Double(totalQuestions)) * 100 : 0
     }
 }
 
@@ -184,4 +241,50 @@ struct QuizQuestionJSON: Codable {
 
 struct QuizWrapper: Codable {
     let questions: [QuizQuestionJSON]
+}
+
+// MARK: - Learning Assist Models
+struct MarkCompleteResponse: Codable {
+    let success: Bool
+    let message: String
+    let topicId: String
+    let completedAt: String
+    
+    enum CodingKeys: String, CodingKey {
+        case success, message
+        case topicId = "topic_id"
+        case completedAt = "completed_at"
+    }
+}
+
+struct LearningProgressResponse: Codable {
+    let userId: String
+    let totalTopics: Int
+    let completedTopics: Int
+    let progressPercentage: Double
+    let completedTopicsList: [CompletedTopic]
+    
+    enum CodingKeys: String, CodingKey {
+        case userId = "user_id"
+        case totalTopics = "total_topics"
+        case completedTopics = "completed_topics"
+        case progressPercentage = "progress_percentage"
+        case completedTopicsList = "completed_topics_list"
+    }
+}
+
+struct CompletedTopic: Codable {
+    let topicId: String
+    let topicName: String
+    let subjectId: String
+    let completedAt: String
+    let score: Double?
+    
+    enum CodingKeys: String, CodingKey {
+        case topicId = "topic_id"
+        case topicName = "topic_name"
+        case subjectId = "subject_id"
+        case completedAt = "completed_at"
+        case score
+    }
 }

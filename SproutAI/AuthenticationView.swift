@@ -6,152 +6,448 @@
 //
 
 import SwiftUI
+import UIKit
+import Combine
+
+// MARK: - Login ViewModel
+@MainActor
+final class LoginViewModel: ObservableObject {
+    enum Mode {
+        case password
+        case otp
+    }
+    
+    @Published var identifier = ""
+    @Published var password = ""
+    @Published var otp = ""
+    @Published var isLoading = false
+    @Published var error: String?
+    @Published var mode: Mode = .password
+    @Published var otpSent = false
+    @Published var countdown = 0
+    
+    private let authService: AuthService
+    private var countdownTimer: Timer?
+    
+    init(authService: AuthService) {
+        self.authService = authService
+    }
+    
+    deinit {
+        countdownTimer?.invalidate()
+    }
+    
+    var identifierPlaceholder: String {
+        switch mode {
+        case .password:
+            return "Enter your registered email or phone number"
+        case .otp:
+            return "Enter the phone number linked to your account"
+        }
+    }
+    
+    var identifierKeyboard: UIKeyboardType {
+        mode == .otp ? .numberPad : .emailAddress
+    }
+    
+    var identifierContentType: UITextContentType {
+        mode == .otp ? .telephoneNumber : .username
+    }
+    
+    var loginButtonTitle: String {
+        mode == .otp ? "Login" : "Access Dashboard"
+    }
+    
+    var isActionDisabled: Bool {
+        if isLoading { return true }
+        switch mode {
+        case .password:
+            return !isIdentifierValidForPassword || password.isEmpty
+        case .otp:
+            return !otpSent || otp.count != 6 || !isIdentifierValidForOTP
+        }
+    }
+    
+    var canSendOTP: Bool {
+        !isLoading && countdown == 0 && isIdentifierValidForOTP
+    }
+    
+    var maskedOTPRecipient: String {
+        let digits = numericIdentifier
+        guard !digits.isEmpty else { return "your phone" }
+        if digits.count <= 4 { return digits }
+        let lastFour = digits.suffix(4)
+        return "••••\(lastFour)"
+    }
+    
+    func switchMode(_ newMode: Mode) {
+        guard mode != newMode else { return }
+        mode = newMode
+        error = nil
+        isLoading = false
+        switch newMode {
+        case .password:
+            otp = ""
+        case .otp:
+            password = ""
+        }
+    }
+    
+    func sendOTP() {
+        guard isIdentifierValidForOTP else {
+            error = "Enter a valid phone number to receive the OTP."
+            return
+        }
+        guard countdown == 0 else { return }
+        
+        isLoading = true
+        error = nil
+        authService.sendOTP(phoneNumber: numericIdentifier) { [weak self] result in
+            Task { @MainActor in
+                guard let self = self else { return }
+                self.isLoading = false
+                switch result {
+                case .success:
+                    self.otpSent = true
+                    self.otp = ""
+                    self.startCountdown()
+                case .failure(let err):
+                    self.error = "Failed to send OTP: \(err.localizedDescription)"
+                }
+            }
+        }
+    }
+    
+    func submit() {
+        switch mode {
+        case .password:
+            guard isIdentifierValidForPassword else {
+                error = "Enter a valid email address or phone number."
+                return
+            }
+        case .otp:
+            guard isIdentifierValidForOTP else {
+                error = "Enter the phone number used to request the OTP."
+                return
+            }
+        }
+        
+        isLoading = true
+        error = nil
+        
+        switch mode {
+        case .password:
+            authService.login(identifier: sanitizedIdentifier, password: password) { [weak self] result in
+                Task { @MainActor in
+                    self?.handleAuthResult(result)
+                }
+            }
+        case .otp:
+            authService.verifyOTP(phoneNumber: numericIdentifier, otp: otp) { [weak self] result in
+                Task { @MainActor in
+                    self?.handleAuthResult(result)
+                }
+            }
+        }
+    }
+    
+    // MARK: - Helpers
+    private var sanitizedIdentifier: String {
+        identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    
+    private var numericIdentifier: String {
+        sanitizedIdentifier.filter(\.isNumber)
+    }
+    
+    private var isIdentifierValidForPassword: Bool {
+        let trimmed = sanitizedIdentifier
+        let digits = numericIdentifier
+        if trimmed.contains("@"), trimmed.contains(".") {
+            return true
+        }
+        return digits.count >= 6
+    }
+    
+    private var isIdentifierValidForOTP: Bool {
+        numericIdentifier.count >= 6
+    }
+    
+    private func startCountdown() {
+        countdownTimer?.invalidate()
+        countdown = 60
+        countdownTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+            guard let self = self else {
+                timer.invalidate()
+                return
+            }
+            if self.countdown > 0 {
+                self.countdown -= 1
+            } else {
+                timer.invalidate()
+                self.countdownTimer = nil
+            }
+        }
+        if let timer = countdownTimer {
+            RunLoop.main.add(timer, forMode: .common)
+        }
+    }
+    
+    private func handleAuthResult(_ result: Result<AuthResponse, Error>) {
+        isLoading = false
+        switch result {
+        case .success:
+            error = nil
+            otpSent = false
+            countdownTimer?.invalidate()
+            countdown = 0
+        case .failure(let err):
+            let prefix = mode == .otp ? "OTP verification failed" : "Login failed"
+            error = "\(prefix): \(err.localizedDescription)"
+        }
+    }
+}
 
 // MARK: - Login View
 struct LoginView: View {
     @ObservedObject var authService: AuthService
-    @State private var phoneNumber = ""
-    @State private var password = ""
-    @State private var isLoading = false
-    @State private var error: String?
+    @StateObject private var viewModel: LoginViewModel
     @State private var showRegistration = false
-    @FocusState private var isPhoneNumberFocused: Bool
+    @FocusState private var isIdentifierFocused: Bool
+    @FocusState private var isOTPFocused: Bool
+    
+    init(authService: AuthService) {
+        _authService = ObservedObject(wrappedValue: authService)
+        _viewModel = StateObject(wrappedValue: LoginViewModel(authService: authService))
+    }
     
     var body: some View {
         VStack(spacing: 32) {
-            VStack(spacing: 8) {
-                Image("SeedlingLabsLogo")
-                    .resizable()
-                    .frame(width: 80, height: 80)
-                    .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                    .shadow(radius: 6)
-                Text("Sprout AI Parent Portal")
-                    .font(.title).fontWeight(.bold)
-                    .foregroundColor(AppTheme.textPrimary)
-                Text("Sign in to access your child's progress")
-                    .font(.subheadline)
-                    .foregroundColor(AppTheme.textPrimary.opacity(0.7))
-            }
-            .padding()
-            .frame(maxWidth: .infinity)
-            .background(AppTheme.cardBackground)
-            .cornerRadius(16)
-            
-            VStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Phone Number")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .padding(.leading, 4)
-                    
-                    ZStack(alignment: .leading) {
-                        if phoneNumber.isEmpty {
-                            Text("Enter your 10-digit phone number")
-                                .foregroundColor(.gray)
-                                .padding(.leading, 16)
-                        }
-                        TextField("", text: $phoneNumber)
-                            .keyboardType(.numberPad)
-                            .textContentType(.telephoneNumber)
-                            .padding()
-                            .foregroundColor(AppTheme.textPrimary)
-                            .background(Color.white)
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(isPhoneNumberFocused ? AppTheme.primary : Color.clear, lineWidth: 2)
-                            )
-                            .focused($isPhoneNumberFocused)
-                    }
-                }
-                
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Password")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-                        .foregroundColor(.white)
-                        .padding(.leading, 4)
-                    
-                    ZStack(alignment: .leading) {
-                        if password.isEmpty {
-                            Text("Enter your password")
-                                .foregroundColor(.gray)
-                                .padding(.leading, 16)
-                        }
-                        SecureField("", text: $password)
-                            .padding()
-                            .foregroundColor(AppTheme.textPrimary)
-                            .background(Color.white)
-                            .cornerRadius(12)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(password.isEmpty ? Color.clear : AppTheme.primary.opacity(0.3), lineWidth: 1)
-                            )
-                    }
-                }
-            }
-            
-            Button(action: handleLogin) {
-                if isLoading {
-                    ProgressView()
-                        .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(AppTheme.primary.opacity(0.8))
-                        .cornerRadius(12)
-                } else {
-                    Text("Access Dashboard")
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background((isLoading || phoneNumber.count != 10 || password.isEmpty) ? AppTheme.primary.opacity(0.5) : AppTheme.primary)
-                        .cornerRadius(12)
-                }
-            }
-            .disabled(isLoading || phoneNumber.count != 10 || password.isEmpty)
-            
-            if let error = error {
+            header
+            formContent
+            submitButton
+            if let error = viewModel.error {
                 Text(error)
                     .foregroundColor(AppTheme.error)
                     .font(.caption)
             }
-            
-            VStack(spacing: 12) {
-                Button("Don't have an account? Register Here") {
-                    showRegistration = true
-                }
-                .font(.title3)
-                .fontWeight(.medium)
-                .foregroundColor(.white)
-                .frame(maxWidth: .infinity)
-                .padding()
-                .background(AppTheme.secondary)
-                .cornerRadius(12)
-            }
+            registrationLink
         }
         .padding(.horizontal)
-        .onAppear {
-            isPhoneNumberFocused = true
+        .onAppear { isIdentifierFocused = true }
+        .onTapGesture {
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         }
         .sheet(isPresented: $showRegistration) {
             RegistrationView(authService: authService)
         }
-    }
-    
-    private func handleLogin() {
-        isLoading = true
-        error = nil
-        authService.login(phoneNumber: phoneNumber, password: password) { result in
-            DispatchQueue.main.async {
-                isLoading = false
-                switch result {
-                case .success:
-                    error = nil
-                case .failure(let err):
-                    error = "Login failed: \(err.localizedDescription)"
+        .onChange(of: viewModel.mode) { _ in
+            isIdentifierFocused = true
+            isOTPFocused = false
+        }
+        .onChange(of: viewModel.otpSent) { sent in
+            if sent {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    isOTPFocused = true
                 }
             }
+        }
+    }
+    
+    private var header: some View {
+        VStack(spacing: 8) {
+            Image("SeedlingLabsLogo")
+                .resizable()
+                .frame(width: 80, height: 80)
+                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                .shadow(radius: 6)
+            Text("Sprout AI Parent Portal")
+                .font(.title).fontWeight(.bold)
+                .foregroundColor(AppTheme.textPrimary)
+            Text("Sign in to access your child's progress")
+                .font(.subheadline)
+                .foregroundColor(AppTheme.textPrimary.opacity(0.7))
+        }
+        .padding()
+        .frame(maxWidth: .infinity)
+        .background(AppTheme.cardBackground)
+        .cornerRadius(16)
+    }
+    
+    private var formContent: some View {
+        VStack(spacing: 16) {
+            identifierField
+            modeToggle
+            if viewModel.mode == .password {
+                passwordField
+            } else {
+                otpField
+            }
+        }
+    }
+    
+    private var identifierField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Email or Phone")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .padding(.leading, 4)
+            
+            TextField(viewModel.identifierPlaceholder, text: $viewModel.identifier)
+                .keyboardType(viewModel.identifierKeyboard)
+                .textContentType(viewModel.identifierContentType)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+                .padding()
+                .foregroundColor(AppTheme.textPrimary)
+                .background(Color.white)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(isIdentifierFocused ? AppTheme.primary : Color.clear, lineWidth: 2)
+                )
+                .focused($isIdentifierFocused)
+        }
+    }
+    
+    private var modeToggle: some View {
+        HStack(spacing: 0) {
+            Button("Password") {
+                viewModel.switchMode(.password)
+            }
+            .foregroundColor(viewModel.mode == .password ? .white : .gray)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(viewModel.mode == .password ? AppTheme.primary : Color.clear)
+            .cornerRadius(8)
+            
+            Button("OTP") {
+                viewModel.switchMode(.otp)
+            }
+            .foregroundColor(viewModel.mode == .otp ? .white : .gray)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .background(viewModel.mode == .otp ? AppTheme.primary : Color.clear)
+            .cornerRadius(8)
+        }
+        .background(Color.gray.opacity(0.2))
+        .cornerRadius(8)
+    }
+    
+    private var passwordField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Password")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .padding(.leading, 4)
+            
+            SecureField("Enter your password", text: $viewModel.password)
+                .padding()
+                .foregroundColor(AppTheme.textPrimary)
+                .background(Color.white)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(viewModel.password.isEmpty ? Color.clear : AppTheme.primary.opacity(0.3), lineWidth: 1)
+                )
+        }
+    }
+    
+    private var otpField: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("OTP")
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.white)
+                .padding(.leading, 4)
+            
+            TextField("Enter 6-digit OTP", text: $viewModel.otp)
+                .keyboardType(.numberPad)
+                .padding()
+                .foregroundColor(AppTheme.textPrimary)
+                .background(Color.white)
+                .cornerRadius(12)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12)
+                        .stroke(viewModel.otp.isEmpty ? Color.clear : AppTheme.primary.opacity(0.3), lineWidth: 1)
+                )
+                .focused($isOTPFocused)
+                .onChange(of: viewModel.otp) { newValue in
+                    if newValue.count > 6 {
+                        viewModel.otp = String(newValue.prefix(6))
+                    }
+                }
+            
+            if viewModel.otpSent {
+                HStack {
+                    Text("OTP sent to \(viewModel.maskedOTPRecipient)")
+                        .foregroundColor(.green)
+                        .font(.caption)
+                    
+                    Spacer()
+                    
+                    if viewModel.countdown > 0 {
+                        Text("Resend in \(viewModel.countdown)s")
+                            .foregroundColor(.gray)
+                            .font(.caption)
+                    } else {
+                        Button("Resend OTP") {
+                            viewModel.sendOTP()
+                        }
+                        .foregroundColor(AppTheme.primary)
+                        .font(.caption)
+                        .disabled(!viewModel.canSendOTP)
+                    }
+                }
+            } else {
+                Button("Send OTP") {
+                    viewModel.sendOTP()
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(viewModel.canSendOTP ? AppTheme.secondary : AppTheme.secondary.opacity(0.5))
+                .cornerRadius(8)
+                .disabled(!viewModel.canSendOTP)
+            }
+        }
+    }
+    
+    private var submitButton: some View {
+        Button(action: viewModel.submit) {
+            if viewModel.isLoading {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(AppTheme.primary.opacity(0.8))
+                    .cornerRadius(12)
+            } else {
+                Text(viewModel.loginButtonTitle)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding()
+                    .background(viewModel.isActionDisabled ? AppTheme.primary.opacity(0.5) : AppTheme.primary)
+                    .cornerRadius(12)
+            }
+        }
+        .disabled(viewModel.isActionDisabled)
+    }
+    
+    private var registrationLink: some View {
+        VStack(spacing: 12) {
+            Button("Don't have an account? Register Here") {
+                showRegistration = true
+            }
+            .font(.title3)
+            .fontWeight(.medium)
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding()
+            .background(AppTheme.secondary)
+            .cornerRadius(12)
         }
     }
 }

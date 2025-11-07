@@ -95,19 +95,69 @@ struct ClassChip: View {
 // MARK: - Empty State View
 struct EmptyStateView: View {
     var body: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: 20) {
             Image(systemName: "book.closed")
-                .font(.system(size: 48))
+                .font(.system(size: 64))
                 .foregroundColor(.white.opacity(0.9))
-            Text("No Subjects Available")
-                .font(.headline)
-                .fontWeight(.semibold)
-                .foregroundColor(.white)
-            Text("No subjects have been assigned to your child's class yet.")
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.9))
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+            
+            VStack(spacing: 12) {
+                Text("No Subjects Available")
+                    .font(.title2)
+                    .fontWeight(.bold)
+                    .foregroundColor(.white)
+                
+                Text("No subjects have been assigned to your child's class yet.")
+                    .font(.subheadline)
+                    .foregroundColor(.white.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                
+                VStack(spacing: 8) {
+                    Text("What you can do:")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundColor(.white.opacity(0.8))
+                    
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AppTheme.success)
+                                .font(.caption)
+                            Text("Contact your school to ensure subjects are assigned")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AppTheme.success)
+                                .font(.caption)
+                            Text("Check back later as new content may be added")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                        
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AppTheme.success)
+                                .font(.caption)
+                            Text("Pull down to refresh and check for updates")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
+                .background(
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(Color.white.opacity(0.1))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12)
+                                .stroke(Color.white.opacity(0.2), lineWidth: 1)
+                        )
+                )
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 40)
@@ -158,6 +208,7 @@ struct SubjectCardView: View {
                             .fontWeight(.semibold)
                             .foregroundColor(AppTheme.secondary)
                     }
+                    
                     GeometryReader { geometry in
                         ZStack(alignment: .leading) {
                             Rectangle()
@@ -173,12 +224,70 @@ struct SubjectCardView: View {
                         }
                     }
                     .frame(height: 8)
+                    
+                    // Progress percentage and status
+                    HStack {
+                        let percentage = Int((Double(subject.completedTopics ?? 0) / Double(max(totalTopics, 1))) * 100)
+                        Text("\(percentage)% Complete")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundColor(AppTheme.primary)
+                        
+                        Spacer()
+                        
+                        if percentage == 100 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "checkmark.circle.fill")
+                                    .foregroundColor(AppTheme.success)
+                                    .font(.caption2)
+                                Text("Completed")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(AppTheme.success)
+                            }
+                        } else if percentage > 0 {
+                            HStack(spacing: 4) {
+                                Image(systemName: "clock.fill")
+                                    .foregroundColor(AppTheme.secondary)
+                                    .font(.caption2)
+                                Text("In Progress")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(AppTheme.secondary)
+                            }
+                        } else {
+                            HStack(spacing: 4) {
+                                Image(systemName: "play.circle")
+                                    .foregroundColor(.gray)
+                                    .font(.caption2)
+                                Text("Not Started")
+                                    .font(.caption2)
+                                    .fontWeight(.medium)
+                                    .foregroundColor(.gray)
+                            }
+                        }
+                    }
                 }
                 .padding(.top, 16)
             }
 
             if let completed = subject.completedTopicsList, !completed.isEmpty {
                 VStack(spacing: 8) {
+                    HStack {
+                        Text("Completed Topics")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .foregroundColor(AppTheme.success)
+                        
+                        Spacer()
+                        
+                        Text("\(completed.count) topic\(completed.count == 1 ? "" : "s")")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                            .foregroundColor(AppTheme.success.opacity(0.8))
+                    }
+                    .padding(.top, 8)
+                    
                     ForEach(completed) { topic in
                         TopicAccordionView(
                             topic: topic,
@@ -327,36 +436,38 @@ struct TopicAccordionView: View {
     }
     
     private var videosSection: some View {
-        Group {
-            if let videos = topic.aiContent?.videos, !videos.isEmpty {
-                let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' has \(videos.count) videos")
-                ForEach(videos.enumerated().map { (index, video) in 
-                    let _ = print("[DEBUG][TopicAccordionView] Video \(index): title='\(video.title)', url='\(video.url)' (length: \(video.url.count))")
-                    return video 
-                }) { video in
-                    VStack(alignment: .leading, spacing: 12) {
-                        VideoLinkView(video: video) {
-                            print("[DEBUG][TopicAccordionView] Video tapped: '\(video.title)' with URL: '\(video.url)'")
-                            
-                            // TEMPORARY: Add a test URL if the video URL is empty
-                            let testURL = video.url.isEmpty ? "https://www.youtube.com/watch?v=dQw4w9WgXcQ" : video.url
-                            
-                            // Validate the URL before passing it
-                            let trimmedURL = testURL.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if !trimmedURL.isEmpty && URL(string: trimmedURL) != nil {
-                                print("[DEBUG][TopicAccordionView] Valid URL, calling onVideoTap with: '\(trimmedURL)'")
-                                onVideoTap(trimmedURL)
-                            } else {
-                                print("[DEBUG][TopicAccordionView] Invalid video URL: '\(testURL)'")
-                                // Still call onVideoTap with the original URL so the parent can handle the error
-                                onVideoTap(testURL)
-                            }
-                        }
-                    }
-                }
-            } else {
+        let originalVideos = (topic.aiContent?.videos ?? [])
+            .map { video in
+                SproutVideo(
+                    id: video.id,
+                    title: video.title,
+                    url: video.url.trimmingCharacters(in: .whitespacesAndNewlines),
+                    duration: video.duration,
+                    thumbnail: video.thumbnail
+                )
+            }
+            .filter { !$0.url.isEmpty && URL(string: $0.url) != nil }
+        
+        let usingFallback = originalVideos.isEmpty
+        let videosToDisplay = usingFallback ? SampleContentProvider.videos(for: topic) : originalVideos
+        
+        return Group {
+            if videosToDisplay.isEmpty {
                 let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' has no videos")
                 noVideosMessage
+            } else {
+                let _ = print("[DEBUG][TopicAccordionView] Topic '\(topic.name)' displaying \(videosToDisplay.count) video(s) (fallback: \(usingFallback))")
+                ForEach(videosToDisplay) { video in
+                    VideoLinkView(video: video, isSample: usingFallback) {
+                        let trimmedURL = video.url.trimmingCharacters(in: .whitespacesAndNewlines)
+                        guard !trimmedURL.isEmpty, URL(string: trimmedURL) != nil else {
+                            print("[DEBUG][TopicAccordionView] Ignoring invalid video URL: '\(video.url)'")
+                            return
+                        }
+                        print("[DEBUG][TopicAccordionView] Video tapped: '\(video.title)' with URL: '\(trimmedURL)' (sample: \(usingFallback))")
+                        onVideoTap(trimmedURL)
+                    }
+                }
             }
         }
     }
@@ -421,6 +532,7 @@ struct TopicAccordionView: View {
 // MARK: - Video Link View
 struct VideoLinkView: View {
     let video: SproutVideo
+    let isSample: Bool
     let onTap: () -> Void
     @State private var isPressed = false
 
@@ -464,7 +576,13 @@ struct VideoLinkView: View {
     }
     
     private var videoInfoSection: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 3) {
+            if isSample {
+                Text("Sample content")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .foregroundColor(AppTheme.secondary)
+            }
             Text(video.title)
                 .font(.caption)
                 .fontWeight(.medium)

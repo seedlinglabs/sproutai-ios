@@ -18,6 +18,7 @@ struct ContentView: View {
                 
             switch authService.authState {
             case .checking:
+                
                 ProgressView()
                     .progressViewStyle(CircularProgressViewStyle(tint: .white))
                     .scaleEffect(1.2)

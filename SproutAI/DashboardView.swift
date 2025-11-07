@@ -17,11 +17,11 @@ class DashboardViewModel: ObservableObject {
 
     private let academicRecordsService = AcademicRecordsService()
     private let topicsService = TopicsService()
+    private let learningAssistService = LearningAssistService()
     private var loadingTask: Task<Void, Never>?
 
     func loadSubjects(for user: Parent) async {
         print("[DEBUG][DashboardVM] Loading subjects for user: \(user.userId), classes: \(user.classAccess)")
-        
         loadingTask?.cancel()
         
         isLoading = true
@@ -82,6 +82,7 @@ class DashboardViewModel: ObservableObject {
                     default:
                         message = "Network error: \(urlError.localizedDescription)"
                     }
+                
                 } else {
                     message = "Failed to load academic records. Please try again."
                 }
@@ -95,6 +96,14 @@ class DashboardViewModel: ObservableObject {
     func retry(for user: Parent) {
         Task {
             await loadSubjects(for: user)
+        }
+    }
+    
+    func markTopicAsComplete(topicId: String, userId: String, completion: @escaping (Result<MarkCompleteResponse, Error>) -> Void) {
+        learningAssistService.markTopicAsComplete(topicId: topicId, userId: userId) { result in
+            DispatchQueue.main.async {
+                completion(result)
+            }
         }
     }
 
@@ -258,16 +267,15 @@ struct DashboardView: View {
                     let columns: [GridItem] = isCompact ? [GridItem(.flexible())] : [GridItem(.flexible()), GridItem(.flexible())]
                     ScrollView {
                         LazyVStack(spacing: 16) {
-                            // Class filter chips
-                            if let classes = authService.parent?.classAccess, !classes.isEmpty {
+                            // Class filter chips (only show if multiple classes)
+                            if let classes = authService.parent?.classAccess, classes.count > 1 {
                                 ScrollView(.horizontal, showsIndicators: false) {
                                     HStack(spacing: 8) {
-                                        ClassChip(title: "All", selected: selectedClass == nil) { 
-                                            withAnimation(.easeInOut) { selectedClass = nil } 
-                                        }
                                         ForEach(classes, id: \.self) { cls in
                                             ClassChip(title: cls, selected: selectedClass == cls) { 
-                                                withAnimation(.easeInOut) { selectedClass = cls } 
+                                                withAnimation(.easeInOut) { 
+                                                    selectedClass = (selectedClass == cls) ? nil : cls
+                                                } 
                                             }
                                         }
                                     }
@@ -385,15 +393,18 @@ struct DashboardView: View {
             
             HStack(alignment: .center, spacing: 12) {
                 HStack(spacing: 12) {
-                    Image("SeedlingLabsLogo")
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(width: 36, height: 36)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(Color.white.opacity(0.1))
-                        )
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(Color.white)
+                            .frame(width: 44, height: 44)
+                        
+                        Image("SeedlingLabsLogo")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 40, height: 40)
+                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                    }
+                    .shadow(color: Color.black.opacity(0.1), radius: 2, x: 0, y: 1)
                     
                     if let user = authService.parent {
                         VStack(alignment: .leading, spacing: 2) {
@@ -407,6 +418,13 @@ struct DashboardView: View {
                                 .font(.caption)
                                 .foregroundColor(.white.opacity(0.85))
                                 .lineLimit(2)
+                            
+                            if !user.classAccess.isEmpty {
+                                Text("Classes: \(user.classAccess.joined(separator: ", "))")
+                                    .font(.caption2)
+                                    .foregroundColor(.white.opacity(0.7))
+                                    .lineLimit(1)
+                            }
                         }
                     }
                 }
